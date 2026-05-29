@@ -69,7 +69,7 @@ def extrair_candidatos_knn(caminho_img, pasta_saida, limiar_densidade=0.12, k_vi
         vizinhos_k = [idx for dist, idx in distancias[:k_real]]
         
         # Faz as combinações (limitado a 4 elementos, como você definiu)
-        limite_comb = min(len(vizinhos_k), 4)
+        limite_comb = min(len(vizinhos_k), 3)
         for tamanho in range(1, limite_comb + 1):
             for combo in combinations(vizinhos_k, tamanho):
                 combos_unicos.add(tuple(sorted(combo)))
@@ -114,7 +114,7 @@ def extrair_candidatos_knn(caminho_img, pasta_saida, limiar_densidade=0.12, k_vi
     print(f"Sucesso! Salvos em '{pasta_saida}'.")
 
 # --- Execução ---
-caminho_imagem = "images/train/cone (152).jpg" 
+caminho_imagem = "images/train/cone (134).jpg" 
 pasta_destino = "candidatos_wisard_baseline"
 
 extrair_candidatos_knn(caminho_imagem, pasta_destino, limiar_densidade=0.20, k_vizinhos=6)
