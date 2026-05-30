@@ -8,25 +8,25 @@ import time
 from itertools import combinations
 from PIL import Image, ImageTk
 
-# --- Configurações Iniciais do Estado (Parâmetros Calibrados) ---
+# --- Configurações Iniciais do Estado (Seus Parâmetros Calibrados) ---
 ESTADO = {
     'idx': 0,
     # 1. Filtros de Cor Laranja (HSV)
     'h1_min': 0, 'h1_max': 19,
     'h2_min': 175, 'h2_max': 179,
-    's_min': 110, 's_max': 255,
-    'v_min': 75, 'v_max': 255,
+    's_min': 140, 's_max': 255,  # Atualizado
+    'v_min': 100, 'v_max': 255,  # Atualizado
     # 2. Morfologia Matemática
     'k_abertura': 3, 'iter_abertura': 1,
     # 3. Heurísticas de Base (Blocos)
     'area_minima': 5,
-    'fator_proporcao': 0.015,
+    'fator_proporcao': 0.012,    # Atualizado
     # 4 e 5. Regras de Densidade e Espaciais (K-NN)
-    'limiar_laranja_min': 0.20,
-    'limiar_laranja_max': 0.95,
-    'limiar_total': 0.30,
-    'k_vizinhos': 6,
-    'fator_raio': 2.20
+    'limiar_laranja_min': 0.15,  # Atualizado
+    'limiar_laranja_max': 1.00,  # Atualizado
+    'limiar_total': 0.24,        # Atualizado
+    'k_vizinhos': 7,             # Atualizado
+    'fator_raio': 2.40           # Atualizado
 }
 
 caminhos_imagens = []
@@ -64,7 +64,7 @@ def processar_e_exibir(*args):
     img_trabalho = img_original_atual.copy()
     hsv = cv2.cvtColor(img_trabalho, cv2.COLOR_BGR2HSV)
 
-    # --- INÍCIO DA MEDIÇÃO DE TEMPO DO PIPELINE LÓGICO ---
+    # --- INÍCIO DA MEDIÇÃO DE TEMPO ---
     inicio_tempo = time.perf_counter()
 
     # --- 1A. MÁSCARA LARANJA DINÂMICA ---
@@ -146,12 +146,14 @@ def processar_e_exibir(*args):
             for combo in combinations(vizinhos_k, tamanho):
                 combos_unicos.add(tuple(sorted(combo)))
 
-    # --- 4. FILTROS DE DENSIDADE ---
+    # --- 4. FILTROS DE DENSIDADE E REMOÇÃO DE REDUNDÂNCIA ---
     l_min = ESTADO['limiar_laranja_min']
     l_max = ESTADO['limiar_laranja_max']
     t_min = ESTADO['limiar_total']
     
-    candidatos_finais = []
+    # Dicionário para garantir Bounding Boxes únicas.
+    # Formato: { (x_g, y_g, w_g, h_g): qtd_elementos_no_combo }
+    bboxes_unicas = {}
     
     for combo_indices in combos_unicos:
         caixas_do_combo = [caixas_validas[idx] for idx in combo_indices]
@@ -168,7 +170,16 @@ def processar_e_exibir(*args):
         densidade_total = (pixels_combo_estrito + pixels_branco_total) / float(area_total_caixa)
 
         if l_min <= densidade_laranja <= l_max and densidade_total >= t_min:
-            candidatos_finais.append((x_g, y_g, w_g, h_g))
+            bbox = (x_g, y_g, w_g, h_g)
+            qtd_elementos = len(combo_indices)
+            
+            # Se a Bounding Box exata já existir, substituímos apenas se o novo combo
+            # contiver mais objetos (ex: [A,B,C] vence [A,C])
+            if bbox not in bboxes_unicas or qtd_elementos > bboxes_unicas[bbox]:
+                bboxes_unicas[bbox] = qtd_elementos
+
+    # A lista final pega apenas as chaves do dicionário (as Bounding Boxes otimizadas e únicas)
+    candidatos_finais = list(bboxes_unicas.keys())
 
     # --- FIM DA MEDIÇÃO DE TEMPO ---
     fim_tempo = time.perf_counter()
@@ -182,7 +193,6 @@ def processar_e_exibir(*args):
     mask_laranja_bgr = cv2.cvtColor(mask_laranja_limpa, cv2.COLOR_GRAY2BGR)
 
     fonte = cv2.FONT_HERSHEY_SIMPLEX
-    # Exibe Finais + Tempo de processamento na imagem
     texto_finais = f"Finais: {len(candidatos_finais)} | Tempo: {tempo_ms:.1f} ms"
     cv2.putText(img_display, texto_finais, (10, 30), fonte, 0.7, (255, 255, 0), 2)
     
@@ -192,15 +202,12 @@ def processar_e_exibir(*args):
     imagem_combinada = cv2.hconcat([img_display, mask_laranja_bgr, img_regioes])
 
     # --- REDIMENSIONAMENTO INTELIGENTE ---
-    h_img, w_img = imagem_combinada.shape[:2]
+    h_img_c, w_img_c = imagem_combinada.shape[:2]
+    max_w, max_h = 1120, 800  
+    escala = min(max_w / w_img_c, max_h / h_img_c)
     
-    max_w = 1120 
-    max_h = 800  
-
-    escala = min(max_w / w_img, max_h / h_img)
-    
-    novo_largo = int(w_img * escala)
-    nova_altura = int(h_img * escala)
+    novo_largo = int(w_img_c * escala)
+    nova_altura = int(h_img_c * escala)
     
     imagem_combinada = cv2.resize(imagem_combinada, (novo_largo, nova_altura))
 
