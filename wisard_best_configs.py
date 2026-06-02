@@ -7,6 +7,7 @@ import math
 import random
 from itertools import combinations
 from sklearn.metrics import accuracy_score
+import wisardpkg as wp  # Importação da biblioteca oficial adicionada
 
 # ==========================================================
 # 1. PARÂMETROS FIXOS E MELHOR CONFIGURAÇÃO
@@ -30,61 +31,7 @@ TUPLA = 16
 IGN_ZERO = True
 
 # ==========================================================
-# 2. A REDE WISARD (PYTHON)
-# ==========================================================
-class WisardPython:
-    def __init__(self, tamanho_tupla, ignore_zero=False):
-        self.tamanho_tupla = tamanho_tupla
-        self.ignore_zero = ignore_zero
-        self.discriminadores = {} 
-        self.mapeamento = []
-        self.num_rams = 0
-
-    def train(self, X, y):
-        num_bits = len(X[0])
-        self.tamanho_tupla = min(self.tamanho_tupla, num_bits) 
-        self.num_rams = num_bits // self.tamanho_tupla
-        
-        self.mapeamento = list(range(num_bits))
-        random.seed(42)
-        random.shuffle(self.mapeamento)
-        
-        for idx_img in range(len(X)):
-            label = y[idx_img]
-            if label not in self.discriminadores:
-                self.discriminadores[label] = [set() for _ in range(self.num_rams)]
-            
-            bits = X[idx_img]
-            for r in range(self.num_rams):
-                endereco = 0
-                for b in range(self.tamanho_tupla):
-                    bit_idx = self.mapeamento[r * self.tamanho_tupla + b]
-                    endereco |= (bits[bit_idx] << b)
-                
-                if self.ignore_zero and endereco == 0: continue
-                self.discriminadores[label][r].add(endereco)
-
-    def classify(self, X):
-        predicoes = []
-        for bits in X:
-            pontuacoes = {lbl: 0 for lbl in self.discriminadores}
-            for lbl in self.discriminadores:
-                for r in range(self.num_rams):
-                    endereco = 0
-                    for b in range(self.tamanho_tupla):
-                        bit_idx = self.mapeamento[r * self.tamanho_tupla + b]
-                        endereco |= (bits[bit_idx] << b)
-                    
-                    if self.ignore_zero and endereco == 0: continue
-                    if endereco in self.discriminadores[lbl][r]:
-                        pontuacoes[lbl] += 1
-            
-            melhor_classe = max(pontuacoes, key=pontuacoes.get)
-            predicoes.append(melhor_classe)
-        return predicoes
-
-# ==========================================================
-# 3. GEOMETRIA, OPENCV E DATA AUGMENTATION
+# 2. GEOMETRIA, OPENCV E DATA AUGMENTATION
 # ==========================================================
 def ler_gabarito_yolo(img_path, img_w, img_h):
     base_nome = os.path.splitext(os.path.basename(img_path))[0]
@@ -191,7 +138,7 @@ def binarizar_recorte(img_crop):
     return (cv2.bitwise_or(m1, m2).flatten() > 0).astype(int).tolist() + (mb.flatten() > 0).astype(int).tolist()
 
 # ==========================================================
-# 4. EXECUÇÃO PRINCIPAL DO BENCHMARK
+# 3. EXECUÇÃO PRINCIPAL DO BENCHMARK
 # ==========================================================
 if __name__ == "__main__":
     print("="*60)
@@ -239,8 +186,11 @@ if __name__ == "__main__":
     print(f" -> Extração Concluída: {len(cones_X)} Cones Perfeitos vs {len(fundos_X)} Não-Cones.")
     
     print(f"\n[Fase 2] Treinando WiSARD (Res={RESOLUCAO}, Tupla={TUPLA}, IgnZero={IGN_ZERO})...")
-    modelo = WisardPython(TUPLA, ignore_zero=IGN_ZERO)
-    modelo.train(X_train, y_train)
+    # Instanciando a WiSARD da biblioteca oficial
+    modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO)
+    # A biblioteca exige que os arrays sejam passados dentro do wp.DataSet
+    dataset_treino = wp.DataSet(X_train, y_train)
+    modelo.train(dataset_treino)
 
     print("\n[Fase 3] Rodando Inferência no Conjunto de Teste End-to-End...")
     pasta_saida = "resultados_finais"
@@ -262,7 +212,9 @@ if __name__ == "__main__":
         if candidatos:
             recortes = [binarizar_recorte(img[y:y+h, x:x+w]) for (x,y,w,h) in candidatos if img[y:y+h, x:x+w].size > 0]
             if recortes:
-                preds = modelo.classify(recortes)
+                # O mesmo envelopamento wp.DataSet é usado para as predições
+                preds = modelo.classify(wp.DataSet(recortes))
+                
                 # Seleciona as caixas que a WiSARD disse que são cones
                 aprovadas_raw = [candidatos[i] for i, p in enumerate(preds) if p == 'cone']
                 
