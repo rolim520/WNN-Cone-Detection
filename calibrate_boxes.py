@@ -8,29 +8,48 @@ import time
 from itertools import combinations
 from PIL import Image, ImageTk
 
-# --- Configurações Iniciais do Estado (Seus Parâmetros Calibrados) ---
+# --- Configurações Iniciais do Estado (Parâmetros Atualizados) ---
 ESTADO = {
     'idx': 0,
-    # 1. Filtros de Cor Laranja (HSV)
+    
+    # --- Controles de Visibilidade na Tela (1=On, 0=Off) ---
+    'show_blue': 0,  # Gabaritos (YOLO) - Começa desligado
+    'show_gray': 1,  # Ignorados (Zona Cinzenta)
+    'show_red': 1,   # Rejeitados (Hard Negatives)
+    'show_green': 1, # Aceitos (Cones)
+
+    # 1A. Filtros de Cor Laranja (HSV)
     'h1_min': 0, 'h1_max': 19,
     'h2_min': 175, 'h2_max': 179,
-    's_min': 140, 's_max': 255,  
+    's_min': 136, 's_max': 255,  
     'v_min': 100, 'v_max': 255,  
-    # 2. Morfologia Matemática
+    
+    # 2A. Morfologia Matemática (Laranja)
     'k_abertura': 3, 'iter_abertura': 1,
+    
+    # --- 1B. Filtros de Cor Branca (HSV) ---
+    'h_b_min': 0, 'h_b_max': 179,
+    's_b_min': 0, 's_b_max': 83,
+    'v_b_min': 145, 'v_b_max': 255,
+    
+    # 2B. Morfologia Matemática (Branco)
+    'k_abert_b': 3, 'iter_abert_b': 1,
+    'k_fech_b': 3, 'iter_fech_b': 2,
+    
     # 3. Heurísticas de Base (Blocos)
     'area_minima': 5,
     'fator_proporcao': 0.012,    
+    
     # 4 e 5. Regras de Densidade e Espaciais (K-NN)
-    'limiar_laranja_min': 0.15,  
+    'limiar_laranja_min': 0.23,  
     'limiar_laranja_max': 1.00,  
-    'limiar_total': 0.24,        
+    'limiar_total': 0.41,        
     'k_vizinhos': 7,             
     'fator_raio': 2.40,
     
-    # --- Limiares de IoU para Separação de Dataset ---
-    'iou_positivo': 0.49,
-    'iou_negativo': 0.20
+    # --- 6. Limiares de IoU para Separação de Dataset ---
+    'iou_positivo': 0.50,
+    'iou_negativo': 0.30
 }
 
 caminhos_imagens = []
@@ -130,12 +149,7 @@ def supressao_nao_maxima_inteligente(candidatos_com_dna, max_overlap=0.80):
             
     return [item[0] for item in caixas_finais]
 
-# --- REMOÇÃO DE CAIXAS VERDES INTERNAS ---
 def remover_caixas_internas(caixas_verdes, max_ioa=0.85):
-    """
-    Se uma caixa verde estiver mais de 85% dentro de outra caixa verde,
-    apaga a menor e fica só com a maior.
-    """
     if not caixas_verdes:
         return []
         
@@ -159,7 +173,6 @@ def remover_caixas_internas(caixas_verdes, max_ioa=0.85):
                 area_inter = (x_inter_max - x_inter_min) * (y_inter_max - y_inter_min)
                 ioa = area_inter / float(area1)
                 
-                # Se a caixa menor estiver engolida pela maior
                 if ioa > max_ioa:
                     engolida = True
                     break
@@ -185,7 +198,7 @@ def processar_e_exibir(*args):
 
     inicio_tempo = time.perf_counter()
 
-    # --- 1. MÁSCARAS ---
+    # --- 1A. MÁSCARA LARANJA ---
     mask1 = cv2.inRange(hsv, 
                         np.array([ESTADO['h1_min'], ESTADO['s_min'], ESTADO['v_min']]), 
                         np.array([ESTADO['h1_max'], ESTADO['s_max'], ESTADO['v_max']]))
@@ -202,9 +215,24 @@ def processar_e_exibir(*args):
     else:
         mask_laranja_limpa = mask_laranja
 
-    mask_branco = cv2.inRange(hsv, np.array([0, 0, 152]), np.array([179, 74, 255]))
-    mask_branco_limpa = cv2.morphologyEx(mask_branco, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
-    mask_branco_limpa = cv2.morphologyEx(mask_branco_limpa, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=2)
+    # --- 1B. MÁSCARA BRANCA (DINÂMICA) ---
+    mask_branco = cv2.inRange(hsv, 
+                              np.array([ESTADO['h_b_min'], ESTADO['s_b_min'], ESTADO['v_b_min']]), 
+                              np.array([ESTADO['h_b_max'], ESTADO['s_b_max'], ESTADO['v_b_max']]))
+    
+    k_abert_b = ESTADO['k_abert_b']
+    if k_abert_b % 2 == 0: k_abert_b += 1
+    if ESTADO['iter_abert_b'] > 0 and k_abert_b > 0:
+        kernel_ab = np.ones((k_abert_b, k_abert_b), np.uint8)
+        mask_branco_limpa = cv2.morphologyEx(mask_branco, cv2.MORPH_OPEN, kernel_ab, iterations=ESTADO['iter_abert_b'])
+    else:
+        mask_branco_limpa = mask_branco
+
+    k_fech_b = ESTADO['k_fech_b']
+    if k_fech_b % 2 == 0: k_fech_b += 1
+    if ESTADO['iter_fech_b'] > 0 and k_fech_b > 0:
+        kernel_fb = np.ones((k_fech_b, k_fech_b), np.uint8)
+        mask_branco_limpa = cv2.morphologyEx(mask_branco_limpa, cv2.MORPH_CLOSE, kernel_fb, iterations=ESTADO['iter_fech_b'])
 
     # --- 2. ENCONTRAR BLOCOS ---
     contornos, _ = cv2.findContours(mask_laranja_limpa, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -316,41 +344,51 @@ def processar_e_exibir(*args):
     # Aplica o novo filtro para apagar verdes redundantes internas
     lista_verdes = remover_caixas_internas(lista_verdes, max_ioa=0.85)
 
-    # --- PINTURA EM CAMADAS ---
-    # As caixas desenhadas por último ficam sobrepostas às desenhadas primeiro
+    # --- PINTURA EM CAMADAS (COM CONTROLE DE VISIBILIDADE) ---
+    
+    # Camada Base: Gabarito (Azul)
+    if ESTADO['show_blue'] == 1:
+        for gab in caixas_gabarito:
+            xg, yg, wg, hg = gab
+            cv2.rectangle(img_display, (xg, yg), (xg+wg, yg+hg), (255, 0, 0), 2)
 
-    # 1. Camada de Baixo: Ignorados / Zona Cinzenta (Cinza)
-    for cand in lista_cinzas:
-        xc, yc, wc, hc = cand
-        cv2.rectangle(img_display, (xc, yc), (xc+wc, yc+hc), (128, 128, 128), 2)
+    # Camada Inferior: Ignorados (Cinza)
+    if ESTADO['show_gray'] == 1:
+        for cand in lista_cinzas:
+            xc, yc, wc, hc = cand
+            cv2.rectangle(img_display, (xc, yc), (xc+wc, yc+hc), (128, 128, 128), 2)
 
-    # 2. Camada do Meio: Rejeitados / Hard Negatives (Vermelho)
-    for cand in lista_vermelhas:
-        xc, yc, wc, hc = cand
-        cv2.rectangle(img_display, (xc, yc), (xc+wc, yc+hc), (0, 0, 255), 2)
+    # Camada do Meio: Rejeitados (Vermelho)
+    if ESTADO['show_red'] == 1:
+        for cand in lista_vermelhas:
+            xc, yc, wc, hc = cand
+            cv2.rectangle(img_display, (xc, yc), (xc+wc, yc+hc), (0, 0, 255), 2)
 
-    # 3. Camada do Topo: Aceitos / Cones (Verde)
-    for cand in lista_verdes:
-        xc, yc, wc, hc = cand
-        cv2.rectangle(img_display, (xc, yc), (xc+wc, yc+hc), (0, 255, 0), 2)
+    # Camada do Topo: Aceitos (Verde)
+    if ESTADO['show_green'] == 1:
+        for cand in lista_verdes:
+            xc, yc, wc, hc = cand
+            cv2.rectangle(img_display, (xc, yc), (xc+wc, yc+hc), (0, 255, 0), 2)
 
     fim_tempo = time.perf_counter()
     tempo_ms = (fim_tempo - inicio_tempo) * 1000
 
     # --- 6. RENDERIZAÇÃO DOS PAINÉIS ---
-    mask_laranja_bgr = cv2.cvtColor(mask_laranja_limpa, cv2.COLOR_GRAY2BGR)
-    fonte = cv2.FONT_HERSHEY_SIMPLEX
+    mask_comb_bgr = np.zeros_like(img_trabalho)
+    mask_comb_bgr[mask_laranja_limpa == 255] = [0, 165, 255]
+    mask_comb_bgr[mask_branco_limpa == 255] = [255, 255, 255]
     
-    # Textos de Interface limpos no canto
+    fonte = cv2.FONT_HERSHEY_SIMPLEX
     cv2.putText(img_display, f"Tempo: {tempo_ms:.1f} ms", (10, 30), fonte, 0.6, (255, 255, 0), 2)
     cv2.putText(img_display, f"Aceitos (Verde): {len(lista_verdes)}", (10, 60), fonte, 0.6, (0, 255, 0), 2)
     cv2.putText(img_display, f"Rejeitados (Vermelho): {len(lista_vermelhas)}", (10, 90), fonte, 0.6, (0, 0, 255), 2)
     cv2.putText(img_display, f"Ignorados (Cinza): {len(lista_cinzas)}", (10, 120), fonte, 0.6, (128, 128, 128), 2)
+    cv2.putText(img_display, f"Gabaritos (Azul): {len(caixas_gabarito)}", (10, 150), fonte, 0.6, (255, 0, 0), 2)
 
-    cv2.putText(mask_laranja_bgr, "Mascara Laranja", (10, 30), fonte, 0.7, (0, 165, 255), 2)
+    cv2.putText(mask_comb_bgr, "Mascara Lar (Laranja) / Bra (Branco)", (10, 30), fonte, 0.6, (255, 255, 255), 2)
     cv2.putText(img_regioes, f"Regioes base: {num_caixas}", (10, 30), fonte, 0.6, (255, 255, 255), 2)
 
-    imagem_combinada = cv2.hconcat([img_display, mask_laranja_bgr, img_regioes])
+    imagem_combinada = cv2.hconcat([img_display, mask_comb_bgr, img_regioes])
 
     h_img_c, w_img_c = imagem_combinada.shape[:2]
     max_w, max_h = 1120, 800  
@@ -383,16 +421,26 @@ def imprimir_e_sair():
     print("\n" + "="*50)
     print(" DUMP DE PARÂMETROS OTIMIZADOS - VISÃO COMPUTACIONAL")
     print("="*50)
-    print("\n## 1. Filtros de Cor Laranja (HSV)")
+    print("\n## 1A. Filtros de Cor Laranja (HSV)")
     print(f"limite_inferior_1 = np.array([{ESTADO['h1_min']}, {ESTADO['s_min']}, {ESTADO['v_min']}])")
     print(f"limite_superior_1 = np.array([{ESTADO['h1_max']}, {ESTADO['s_max']}, {ESTADO['v_max']}])")
     print(f"limite_inferior_2 = np.array([{ESTADO['h2_min']}, {ESTADO['s_min']}, {ESTADO['v_min']}])")
     print(f"limite_superior_2 = np.array([{ESTADO['h2_max']}, {ESTADO['s_max']}, {ESTADO['v_max']}])")
     
-    print("\n## 2. Morfologia Matemática")
+    print("\n## 1B. Filtros de Cor Branca (HSV)")
+    print(f"limite_inferior_branco = np.array([{ESTADO['h_b_min']}, {ESTADO['s_b_min']}, {ESTADO['v_b_min']}])")
+    print(f"limite_superior_branco = np.array([{ESTADO['h_b_max']}, {ESTADO['s_b_max']}, {ESTADO['v_b_max']}])")
+    
+    print("\n## 2A. Morfologia Matemática (Laranja)")
     print(f"kernel_abertura = np.ones(({ESTADO['k_abertura']}, {ESTADO['k_abertura']}), np.uint8)")
     print(f"iteracoes_abertura = {ESTADO['iter_abertura']}")
     
+    print("\n## 2B. Morfologia Matemática (Branco)")
+    print(f"kernel_abertura_branco = np.ones(({ESTADO['k_abert_b']}, {ESTADO['k_abert_b']}), np.uint8)")
+    print(f"iteracoes_abertura_branco = {ESTADO['iter_abert_b']}")
+    print(f"kernel_fechamento_branco = np.ones(({ESTADO['k_fech_b']}, {ESTADO['k_fech_b']}), np.uint8)")
+    print(f"iteracoes_fechamento_branco = {ESTADO['iter_fech_b']}")
+
     print("\n## 3. Heurísticas de Base (Blocos)")
     print(f"area_minima_absoluta = {ESTADO['area_minima']} px")
     print(f"fator_proporcao_adaptativo = {ESTADO['fator_proporcao']:.3f}")
@@ -414,7 +462,7 @@ def imprimir_e_sair():
 
 # --- Construção da Interface Gráfica ---
 root = tk.Tk()
-root.title("Painel Supremo: Segmentação + Filtro Espacial + Calibração IoU")
+root.title("Painel Supremo: Segmentação + Filtro Espacial + Calibração IoU + Branco")
 root.geometry("1550x850") 
 
 frame_controles = tk.Frame(root, width=400, padx=10, pady=5)
@@ -455,30 +503,54 @@ frame_nav.pack(fill='x', pady=4)
 slider_img = tk.Scale(frame_nav, from_=0, to=total_imgs-1, orient='horizontal', command=lambda v: (ao_mudar_slider('idx', v, False), atualizar_imagem()))
 slider_img.pack(fill='x')
 
+# --- BLOCO DE CONTROLE DE VISIBILIDADE ---
+frame_vis = tk.LabelFrame(scrollable_frame, text="Visibilidade das Caixas (0=Off, 1=On)", fg="black")
+frame_vis.pack(fill='x', pady=4)
+criar_slider(frame_vis, "Mostrar Gabarito (Azul)", 'show_blue', 0, 1, 1, False)
+criar_slider(frame_vis, "Mostrar Aceitos (Verde)", 'show_green', 0, 1, 1, False)
+criar_slider(frame_vis, "Mostrar Rejeitados (Vermelho)", 'show_red', 0, 1, 1, False)
+criar_slider(frame_vis, "Mostrar Ignorados (Cinza)", 'show_gray', 0, 1, 1, False)
+
 frame_iou = tk.LabelFrame(scrollable_frame, text="Calibração de Dataset (IoU)", fg="purple")
 frame_iou.pack(fill='x', pady=4)
 criar_slider(frame_iou, "IoU POSITIVO (Cone > X)", 'iou_positivo', 0.10, 1.00, 0.01, True)
 criar_slider(frame_iou, "IoU NEGATIVO (Fundo < X)", 'iou_negativo', 0.00, 0.50, 0.01, True)
 
-frame_h1 = tk.LabelFrame(scrollable_frame, text="Cor Laranja: Filtro Principal")
+frame_h1 = tk.LabelFrame(scrollable_frame, text="Cor Laranja: Filtro Principal", fg="orange")
 frame_h1.pack(fill='x', pady=4)
 criar_slider(frame_h1, "H1 Min", 'h1_min', 0, 179)
 criar_slider(frame_h1, "H1 Max", 'h1_max', 0, 179)
 
-frame_h2 = tk.LabelFrame(scrollable_frame, text="Cor Laranja: Tons Altos (Vermelhos)")
+frame_h2 = tk.LabelFrame(scrollable_frame, text="Cor Laranja: Tons Altos (Vermelhos)", fg="orange")
 frame_h2.pack(fill='x', pady=4)
 criar_slider(frame_h2, "H2 Min", 'h2_min', 0, 179)
 criar_slider(frame_h2, "H2 Max", 'h2_max', 0, 179)
 
-frame_sv = tk.LabelFrame(scrollable_frame, text="Saturação e Brilho (Laranja)")
+frame_sv = tk.LabelFrame(scrollable_frame, text="Saturação e Brilho (Laranja)", fg="orange")
 frame_sv.pack(fill='x', pady=4)
 criar_slider(frame_sv, "S Min", 's_min', 0, 255)
 criar_slider(frame_sv, "V Min", 'v_min', 0, 255)
 
-frame_morf = tk.LabelFrame(scrollable_frame, text="Limpeza de Máscara (Abertura)", fg="red")
+frame_morf = tk.LabelFrame(scrollable_frame, text="Morfologia Laranja", fg="orange")
 frame_morf.pack(fill='x', pady=4)
-criar_slider(frame_morf, "Tamanho do Pincel", 'k_abertura', 1, 15, resolucao=2)
-criar_slider(frame_morf, "Iterações (Força)", 'iter_abertura', 0, 5)
+criar_slider(frame_morf, "Pincel Abertura", 'k_abertura', 1, 15, resolucao=2)
+criar_slider(frame_morf, "Iterações Abertura", 'iter_abertura', 0, 5)
+
+frame_branco = tk.LabelFrame(scrollable_frame, text="Cor Branca: Filtro HSV", fg="gray")
+frame_branco.pack(fill='x', pady=4)
+criar_slider(frame_branco, "H Min (Branco)", 'h_b_min', 0, 179)
+criar_slider(frame_branco, "H Max (Branco)", 'h_b_max', 0, 179)
+criar_slider(frame_branco, "S Min (Branco)", 's_b_min', 0, 255)
+criar_slider(frame_branco, "S Max (Branco)", 's_b_max', 0, 255)
+criar_slider(frame_branco, "V Min (Branco)", 'v_b_min', 0, 255)
+criar_slider(frame_branco, "V Max (Branco)", 'v_b_max', 0, 255)
+
+frame_morf_b = tk.LabelFrame(scrollable_frame, text="Morfologia Branca", fg="gray")
+frame_morf_b.pack(fill='x', pady=4)
+criar_slider(frame_morf_b, "Pincel Abertura", 'k_abert_b', 1, 15, resolucao=2)
+criar_slider(frame_morf_b, "Iter. Abertura", 'iter_abert_b', 0, 5)
+criar_slider(frame_morf_b, "Pincel Fechamento", 'k_fech_b', 1, 15, resolucao=2)
+criar_slider(frame_morf_b, "Iter. Fechamento", 'iter_fech_b', 0, 5)
 
 frame_geo = tk.LabelFrame(scrollable_frame, text="Parâmetros de Pipeline", fg="blue")
 frame_geo.pack(fill='x', pady=4)
