@@ -5,29 +5,30 @@ import glob
 import tkinter as tk
 import math
 import time
+import json
 from itertools import combinations
 from PIL import Image, ImageTk
 
-# --- Configurações Iniciais do Estado (Seus Parâmetros Calibrados) ---
-ESTADO = {
-    'idx': 0,
-    # 1. Filtros de Cor Laranja (HSV)
-    'h1_min': 0, 'h1_max': 19,
-    'h2_min': 175, 'h2_max': 179,
-    's_min': 140, 's_max': 255,  # Atualizado
-    'v_min': 100, 'v_max': 255,  # Atualizado
-    # 2. Morfologia Matemática
-    'k_abertura': 3, 'iter_abertura': 1,
-    # 3. Heurísticas de Base (Blocos)
-    'area_minima': 5,
-    'fator_proporcao': 0.012,    # Atualizado
-    # 4 e 5. Regras de Densidade e Espaciais (K-NN)
-    'limiar_laranja_min': 0.15,  # Atualizado
-    'limiar_laranja_max': 1.00,  # Atualizado
-    'limiar_total': 0.24,        # Atualizado
-    'k_vizinhos': 7,             # Atualizado
-    'fator_raio': 2.40           # Atualizado
-}
+ARQUIVO_CONFIG = "config.json"
+
+def carregar_configuracoes():
+    if not os.path.exists(ARQUIVO_CONFIG):
+        raise FileNotFoundError(f"[!] O arquivo {ARQUIVO_CONFIG} não foi encontrado. Por favor, crie o arquivo JSON com os parâmetros antes de rodar.")
+    
+    with open(ARQUIVO_CONFIG, 'r') as f:
+        print(f"[*] Configurações carregadas com sucesso de {ARQUIVO_CONFIG}")
+        return json.load(f)
+
+def salvar_configuracoes():
+    try:
+        with open(ARQUIVO_CONFIG, 'w') as f:
+            json.dump(ESTADO, f, indent=4)
+        print(f"[*] Configurações salvas com sucesso em {ARQUIVO_CONFIG}")
+    except Exception as e:
+        print(f"[!] Erro ao salvar {ARQUIVO_CONFIG}: {e}")
+
+# Carrega o estado global estritamente a partir do JSON
+ESTADO = carregar_configuracoes()
 
 caminhos_imagens = []
 img_original_atual = None
@@ -85,9 +86,15 @@ def processar_e_exibir(*args):
         mask_laranja_limpa = mask_laranja
 
     # --- 1B. MÁSCARA BRANCA ---
-    mask_branco = cv2.inRange(hsv, np.array([0, 0, 152]), np.array([179, 74, 255]))
-    mask_branco_limpa = cv2.morphologyEx(mask_branco, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
-    mask_branco_limpa = cv2.morphologyEx(mask_branco_limpa, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8), iterations=2)
+    mask_branco = cv2.inRange(hsv, 
+                              np.array([ESTADO['h_b_min'], ESTADO['s_b_min'], ESTADO['v_b_min']]), 
+                              np.array([ESTADO['h_b_max'], ESTADO['s_b_max'], ESTADO['v_b_max']]))
+    
+    k_abert_b = ESTADO['k_abert_b']
+    k_fech_b = ESTADO['k_fech_b']
+    
+    mask_branco_limpa = cv2.morphologyEx(mask_branco, cv2.MORPH_OPEN, np.ones((k_abert_b, k_abert_b), np.uint8), iterations=ESTADO['iter_abert_b'])
+    mask_branco_limpa = cv2.morphologyEx(mask_branco_limpa, cv2.MORPH_CLOSE, np.ones((k_fech_b, k_fech_b), np.uint8), iterations=ESTADO['iter_fech_b'])
 
     # --- 2. ENCONTRAR BLOCOS (COM ÁREA ADAPTATIVA) ---
     contornos, _ = cv2.findContours(mask_laranja_limpa, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -151,8 +158,6 @@ def processar_e_exibir(*args):
     l_max = ESTADO['limiar_laranja_max']
     t_min = ESTADO['limiar_total']
     
-    # Dicionário para garantir Bounding Boxes únicas.
-    # Formato: { (x_g, y_g, w_g, h_g): qtd_elementos_no_combo }
     bboxes_unicas = {}
     
     for combo_indices in combos_unicos:
@@ -173,12 +178,9 @@ def processar_e_exibir(*args):
             bbox = (x_g, y_g, w_g, h_g)
             qtd_elementos = len(combo_indices)
             
-            # Se a Bounding Box exata já existir, substituímos apenas se o novo combo
-            # contiver mais objetos (ex: [A,B,C] vence [A,C])
             if bbox not in bboxes_unicas or qtd_elementos > bboxes_unicas[bbox]:
                 bboxes_unicas[bbox] = qtd_elementos
 
-    # A lista final pega apenas as chaves do dicionário (as Bounding Boxes otimizadas e únicas)
     candidatos_finais = list(bboxes_unicas.keys())
 
     # --- FIM DA MEDIÇÃO DE TEMPO ---
@@ -201,7 +203,6 @@ def processar_e_exibir(*args):
 
     imagem_combinada = cv2.hconcat([img_display, mask_laranja_bgr, img_regioes])
 
-    # --- REDIMENSIONAMENTO INTELIGENTE ---
     h_img_c, w_img_c = imagem_combinada.shape[:2]
     max_w, max_h = 1120, 800  
     escala = min(max_w / w_img_c, max_h / h_img_c)
@@ -257,6 +258,8 @@ def imprimir_e_sair():
     print(f"limiar_laranja_max = {ESTADO['limiar_laranja_max']:.2f}")
     print(f"limiar_total_min   = {ESTADO['limiar_total']:.2f}")
     print("="*50 + "\n")
+    
+    salvar_configuracoes()
     root.destroy()
 
 # --- Construção da Interface Gráfica ---
@@ -267,7 +270,6 @@ root.geometry("1550x850")
 frame_controles = tk.Frame(root, width=400, padx=10, pady=5)
 frame_controles.pack(side=tk.LEFT, fill=tk.Y)
 
-# Canvas de Rolagem
 canvas = tk.Canvas(frame_controles, borderwidth=0, width=380)
 scrollbar = tk.Scrollbar(frame_controles, orient="vertical", command=canvas.yview)
 scrollable_frame = tk.Frame(canvas)
@@ -307,6 +309,7 @@ frame_nav = tk.LabelFrame(scrollable_frame, text="Navegação (Teclado: A / D)")
 frame_nav.pack(fill='x', pady=4)
 slider_img = tk.Scale(frame_nav, from_=0, to=total_imgs-1, orient='horizontal', 
                       command=lambda v: (ao_mudar_slider('idx', v, False), atualizar_imagem()))
+slider_img.set(ESTADO['idx'])
 slider_img.pack(fill='x')
 
 # Bloco HSV Laranja
