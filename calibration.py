@@ -23,6 +23,10 @@ def salvar_configuracoes():
 # Carrega o estado global (a função já existe no seu utils.py)
 ESTADO = carregar_configuracoes()
 
+# Inicializa parâmetros do Canny caso não existam no config.json antigo
+if 'canny_limiar1' not in ESTADO: ESTADO['canny_limiar1'] = 100
+if 'canny_limiar2' not in ESTADO: ESTADO['canny_limiar2'] = 200
+
 caminhos_imagens = []
 img_original_atual = None
 tk_image = None
@@ -56,6 +60,10 @@ def processar_e_exibir(*args):
 
     # 2. Usa a função unificada do utils.py para extrair os candidatos finais
     candidatos_finais = extrair_candidatos_multiplos(mask_laranja, mask_branco, w_img, h_img, ESTADO)
+
+    # 3. NOVO: Aplica a Detecção de Bordas de Canny
+    edges = gerar_canny(img_trabalho, ESTADO)
+    img_canny = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR) # Converte para 3 canais para o grid
 
     # --- FIM DA MEDIÇÃO DE TEMPO ---
     fim_tempo = time.perf_counter()
@@ -93,9 +101,12 @@ def processar_e_exibir(*args):
     cv2.putText(img_display, f"Finais gerados: {len(candidatos_finais)} | Tempo: {tempo_ms:.1f} ms", (10, 30), fonte, 0.7, (255, 255, 0), 2)
     cv2.putText(painel_mascaras, "Mascaras: Laranja + Branco", (10, 30), fonte, 0.7, (255, 255, 255), 2)
     cv2.putText(img_regioes, f"Regioes base: {idx_regiao_valida} (Corte: >{int(limite_area_final)}px)", (10, 30), fonte, 0.6, (255, 255, 255), 2)
+    cv2.putText(img_canny, f"Canny Edges ({int(ESTADO['canny_limiar1'])} - {int(ESTADO['canny_limiar2'])})", (10, 30), fonte, 0.7, (255, 255, 255), 2)
 
-    # Montagem Final Lado a Lado
-    imagem_combinada = cv2.hconcat([img_display, painel_mascaras, img_regioes])
+    # NOVO: Montagem Final Grid 2x2
+    linha1 = cv2.hconcat([img_display, painel_mascaras])
+    linha2 = cv2.hconcat([img_regioes, img_canny])
+    imagem_combinada = cv2.vconcat([linha1, linha2])
 
     # Redimensionamento para caber na tela
     h_img_c, w_img_c = imagem_combinada.shape[:2]
@@ -153,6 +164,10 @@ def imprimir_e_sair():
     print(f"Máx. Regiões Internas = {ESTADO['max_regioes_internas']}")
     print(f"Densidade Laranja = {ESTADO['limiar_laranja_min']:.2f} a {ESTADO['limiar_laranja_max']:.2f}")
     print(f"Densidade Total (Lar + Br) = {ESTADO['limiar_total']:.2f}")
+
+    print("\n## 4. Binarização Canny Edges")
+    print(f"Canny Limiar 1 = {ESTADO['canny_limiar1']}")
+    print(f"Canny Limiar 2 = {ESTADO['canny_limiar2']}")
     print("="*50 + "\n")
     
     salvar_configuracoes()
@@ -160,7 +175,7 @@ def imprimir_e_sair():
 
 # --- Construção da Interface Gráfica ---
 root = tk.Tk()
-root.title("Painel Supremo de Calibração: Laranja + Branco + Pipeline")
+root.title("Painel Supremo de Calibração: Laranja + Branco + Pipeline + Canny")
 root.geometry("1550x850") 
 
 frame_controles = tk.Frame(root, width=400, padx=10, pady=5)
@@ -262,6 +277,12 @@ frame_dens.pack(fill='x', pady=4)
 criar_slider(frame_dens, "Densidade Lar. MÍNIMA", 'limiar_laranja_min', 0.0, 1.0, 0.01, True)
 criar_slider(frame_dens, "Densidade Lar. MÁXIMA", 'limiar_laranja_max', 0.0, 1.0, 0.01, True)
 criar_slider(frame_dens, "Densidade TOTAL (Lar + Br)", 'limiar_total', 0.0, 1.0, 0.01, True)
+
+# --- NOVO: BINARIZAÇÃO CANNY ---
+frame_canny = tk.LabelFrame(scrollable_frame, text="Binarização: Canny Edges", fg="purple")
+frame_canny.pack(fill='x', pady=4)
+criar_slider(frame_canny, "Limiar 1 (MinVal)", 'canny_limiar1', 0, 500, 1, False)
+criar_slider(frame_canny, "Limiar 2 (MaxVal)", 'canny_limiar2', 0, 500, 1, False)
 
 btn_sair = tk.Button(scrollable_frame, text="SALVAR E SAIR", bg="green", fg="white", font=("Arial", 11, "bold"), command=imprimir_e_sair)
 btn_sair.pack(fill='x', pady=10)

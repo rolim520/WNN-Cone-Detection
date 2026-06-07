@@ -9,16 +9,23 @@ from utils import *
 
 ESTADO = carregar_configuracoes()
 
+# ==========================================================
+# PARÂMETROS OTIMIZADOS (Refletindo o Top 1 do Grid Search)
+# ==========================================================
+MODO_BINARIZACAO = 'cor' # Opções: 'cor', 'canny', 'hibrido'
 RESOLUCAO = 64
 TUPLA = 16
 IGN_ZERO = False
+
 EXIBIR_TODAS_CAIXAS = False
 LIMIAR_AR_CONE = 1.25
+# ==========================================================
 
 if __name__ == "__main__":
     print("="*60)
     print(" BENCHMARK FINAL: PIPELINE SEM PESOS vs TRACON (YOLOv5)")
     print("="*60)
+    print(f" -> Modo Ativo: {MODO_BINARIZACAO.upper()}")
     
     print("\n[Fase 1] Carregando Dados de Treino...")
     cones_X, fundos_X = [], []
@@ -27,25 +34,35 @@ if __name__ == "__main__":
         if img is None: continue
         h_img, w_img = img.shape[:2]
         gabaritos = ler_gabarito_yolo(arq, w_img, h_img)
+        
         mask_lar, mask_br = gerar_mascaras(img, ESTADO)
+        mask_canny = gerar_canny(img, ESTADO) # <- Canny gerado
         
         for x, y, w, h in gabaritos:
-            c_lar, c_br = mask_lar[max(0,y):y+h, max(0,x):x+w], mask_br[max(0,y):y+h, max(0,x):x+w]
+            x, y = max(0, x), max(0, y)
+            c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
+            c_canny = mask_canny[y:y+h, x:x+w] # <- Recorte Canny
+            
             if c_lar.size > 0:
-                c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE)
-                for v_lar, v_br in augmentar_recorte_mascaras(c_lar, c_br):
-                    cones_X.append(binarizar_para_resolucao(v_lar, v_br, RESOLUCAO))
+                c_lar, c_br, c_canny = alinhar_cone_vertical(c_lar, c_br, c_canny, limiar_ar=LIMIAR_AR_CONE)
+                for v_lar, v_br, v_canny in augmentar_recorte_mascaras(c_lar, c_br, c_canny):
+                    cones_X.append(binarizar_para_resolucao(v_lar, v_br, RESOLUCAO, v_canny, MODO_BINARIZACAO))
         
         for cand in extrair_candidatos_multiplos(mask_lar, mask_br, w_img, h_img, ESTADO):
             x, y, w, h = cand
-            c_lar, c_br = mask_lar[max(0,y):y+h, max(0,x):x+w], mask_br[max(0,y):y+h, max(0,x):x+w]
+            x, y = max(0, x), max(0, y)
+            c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
+            c_canny = mask_canny[y:y+h, x:x+w] # <- Recorte Canny
+            
             if c_lar.size == 0: continue
             iou = max([calcular_iou(cand, gab) for gab in gabaritos], default=0.0)
+            
             if iou <= ESTADO['iou_negativo']:
-                c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE)
-                fundos_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
+                c_lar, c_br, c_canny = alinhar_cone_vertical(c_lar, c_br, c_canny, limiar_ar=LIMIAR_AR_CONE)
+                fundos_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO, c_canny, MODO_BINARIZACAO))
             elif iou >= ESTADO['iou_positivo']:
-                cones_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
+                c_lar, c_br, c_canny = alinhar_cone_vertical(c_lar, c_br, c_canny, limiar_ar=LIMIAR_AR_CONE)
+                cones_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO, c_canny, MODO_BINARIZACAO))
             
     random.seed(42)
     random.shuffle(fundos_X)
@@ -57,7 +74,8 @@ if __name__ == "__main__":
     modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO)
     modelo.train(wp.DataSet(X_train, y_train))
 
-    salvar_imagem_mental(modelo, resolucao=RESOLUCAO)
+    # Atualizado para receber o modo de binarização
+    salvar_imagem_mental(modelo, resolucao=RESOLUCAO, modo=MODO_BINARIZACAO)
 
     print("\n[Fase 3] Rodando Inferência no Conjunto de Teste End-to-End...")
     pasta_saida = "resultados_finais"
@@ -74,16 +92,21 @@ if __name__ == "__main__":
         
         t0 = time.perf_counter()
         mask_lar, mask_br = gerar_mascaras(img, ESTADO)
+        mask_canny = gerar_canny(img, ESTADO) # <- Canny gerado
+        
         candidatos = extrair_candidatos_multiplos(mask_lar, mask_br, img.shape[1], img.shape[0], ESTADO)
         caixas_filtradas = []
         
         if candidatos:
             recortes, candidatos_validos = [], []
             for (x, y, w, h) in candidatos:
-                c_lar, c_br = mask_lar[max(0,y):y+h, max(0,x):x+w], mask_br[max(0,y):y+h, max(0,x):x+w]
+                x, y = max(0, x), max(0, y)
+                c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
+                c_canny = mask_canny[y:y+h, x:x+w] # <- Recorte Canny
+                
                 if c_lar.size > 0:
-                    c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE)
-                    recortes.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
+                    c_lar, c_br, c_canny = alinhar_cone_vertical(c_lar, c_br, c_canny, limiar_ar=LIMIAR_AR_CONE)
+                    recortes.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO, c_canny, MODO_BINARIZACAO))
                     candidatos_validos.append((x, y, w, h))
                     
             if recortes:
@@ -95,7 +118,7 @@ if __name__ == "__main__":
                     if not any(calcular_iom(box_raw, b_apr) > 0.6 for b_apr in caixas_filtradas):
                         caixas_filtradas.append(box_raw)
 
-                # --- EXIBIR TODAS AS CAIXAS (Lógica copiada do realtime_detect) ---
+                # --- EXIBIR TODAS AS CAIXAS ---
                 if EXIBIR_TODAS_CAIXAS:
                     for idx, box in enumerate(candidatos_validos):
                         cor = (0, 255, 0) if preds[idx] == 'cone' else (0, 0, 255)
@@ -133,5 +156,5 @@ if __name__ == "__main__":
     
     print("\n" + "="*60)
     print(f" -> Precisão : {precisao:.2f}% | Recall : {recall:.2f}% | F1: {f1:.2f}%")
-    print(f" -> Média de IoU nos Acertos: {np.mean(ious_acertos)*100:.2f}%")
+    print(f" -> Média de IoU nos Acertos: {np.mean(ious_acertos)*100:.2f}%" if ious_acertos else " -> Média de IoU nos Acertos: 0.00%")
     print(f" -> Velocidade: {np.mean(tempos):.2f} ms por imagem")

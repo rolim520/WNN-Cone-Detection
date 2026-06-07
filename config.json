@@ -1,5 +1,5 @@
 {
-    "idx": 210,
+    "idx": 77,
     "h1_min": 0,
     "h1_max": 20,
     "h2_min": 175,
@@ -30,5 +30,7 @@
     "iou_positivo": 0.8,
     "iou_negativo": 0.6,
     "razao_aspecto_max": 3.5,
-    "max_regioes_internas": 5
+    "max_regioes_internas": 5,
+    "canny_limiar1": 90,
+    "canny_limiar2": 200
 }
