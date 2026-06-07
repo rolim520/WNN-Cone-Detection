@@ -17,7 +17,15 @@ def carregar_configuracoes():
     
     with open(ARQUIVO_CONFIG, 'r') as f:
         print(f"[*] Configurações carregadas com sucesso de {ARQUIVO_CONFIG}")
-        return json.load(f)
+        config = json.load(f)
+        
+        # Garante que os novos parâmetros existam no JSON antigo sem quebrar o código
+        if 'razao_aspecto_max' not in config:
+            config['razao_aspecto_max'] = 4.0
+        if 'max_regioes_internas' not in config:
+            config['max_regioes_internas'] = 5
+            
+        return config
 
 def salvar_configuracoes():
     try:
@@ -153,10 +161,12 @@ def processar_e_exibir(*args):
             for combo in combinations(vizinhos_k, tamanho):
                 combos_unicos.add(tuple(sorted(combo)))
 
-    # --- 4. FILTROS DE DENSIDADE E REMOÇÃO DE REDUNDÂNCIA ---
+    # --- 4. FILTROS DE DENSIDADE, GEOMETRIA E REMOÇÃO DE REDUNDÂNCIA ---
     l_min = ESTADO['limiar_laranja_min']
     l_max = ESTADO['limiar_laranja_max']
     t_min = ESTADO['limiar_total']
+    razao_max = ESTADO['razao_aspecto_max']
+    max_reg_internas = ESTADO['max_regioes_internas']
     
     bboxes_unicas = {}
     
@@ -166,6 +176,24 @@ def processar_e_exibir(*args):
         
         if w_g <= 5 or h_g <= 5: continue
             
+        # Filtro de Razão de Aspecto
+        razao_aspecto = max(w_g, h_g) / float(min(w_g, h_g))
+        if razao_aspecto > razao_max:
+            continue
+            
+        # ==========================================================
+        # NOVO: FILTRO DE EXCESSO DE REGIÕES INTERNAS (OVERLAP)
+        # ==========================================================
+        regioes_contidas = 0
+        for cx, cy in centroides:
+            # Checa se o centróide cai dentro da bounding box global gerada
+            if x_g <= cx <= (x_g + w_g) and y_g <= cy <= (y_g + h_g):
+                regioes_contidas += 1
+                
+        # Se essa bounding box engoliu mais regiões do que o permitido, é lixo
+        if regioes_contidas > max_reg_internas:
+            continue
+
         area_total_caixa = w_g * h_g
         pixels_combo_estrito = sum([pixels_por_caixa[idx] for idx in combo_indices])
         densidade_laranja = pixels_combo_estrito / float(area_total_caixa)
@@ -245,9 +273,11 @@ def imprimir_e_sair():
     print(f"kernel_abertura = np.ones(({ESTADO['k_abertura']}, {ESTADO['k_abertura']}), np.uint8)")
     print(f"iteracoes_abertura = {ESTADO['iter_abertura']}")
     
-    print("\n## 3. Heurísticas de Base (Blocos)")
+    print("\n## 3. Heurísticas de Base (Blocos e Filtros)")
     print(f"area_minima_absoluta = {ESTADO['area_minima']} px")
     print(f"fator_proporcao_adaptativo = {ESTADO['fator_proporcao']:.3f} ({(ESTADO['fator_proporcao']*100):.1f}% do maior objeto)")
+    print(f"razao_aspecto_max = {ESTADO['razao_aspecto_max']:.2f}")
+    print(f"max_regioes_internas = {ESTADO['max_regioes_internas']}")
     
     print("\n## 4. Agrupamento Espacial (K-NN)")
     print(f"k_vizinhos = {ESTADO['k_vizinhos']}")
@@ -334,13 +364,15 @@ frame_morf.pack(fill='x', pady=4)
 criar_slider(frame_morf, "Tamanho do Pincel", 'k_abertura', 1, 15, resolucao=2)
 criar_slider(frame_morf, "Iterações (Força)", 'iter_abertura', 0, 5)
 
-# Geometria e Pipeline (COM ADAPTATIVO)
+# Geometria e Pipeline (COM ADAPTATIVO E FILTROS DE TAMANHO)
 frame_geo = tk.LabelFrame(scrollable_frame, text="Parâmetros de Pipeline", fg="blue")
 frame_geo.pack(fill='x', pady=4)
 criar_slider(frame_geo, "Área Mínima Absoluta", 'area_minima', 1, 50, 1, False)
 criar_slider(frame_geo, "Fator Proporção (Adaptativo)", 'fator_proporcao', 0.0, 0.1, 0.001, True)
 criar_slider(frame_geo, "K Vizinhos (KNN)", 'k_vizinhos', 1, 12, 1, False)
 criar_slider(frame_geo, "Fator Raio (Distância)", 'fator_raio', 0.5, 5.0, 0.1, True)
+criar_slider(frame_geo, "Razão Máx. Aspecto", 'razao_aspecto_max', 1.0, 10.0, 0.1, True)
+criar_slider(frame_geo, "Máx. Regiões na BBox", 'max_regioes_internas', 1, 20, 1, False)
 
 # Densidade
 frame_dens = tk.LabelFrame(scrollable_frame, text="Cortes de Densidade")
