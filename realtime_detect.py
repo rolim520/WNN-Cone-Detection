@@ -25,6 +25,9 @@ LIMIAR_AR_CONE = 1.25
 # ==========================================================
 # Quantos frames no passado o sistema deve lembrar?
 N_FRAMES_MEMORIA = 3
+
+# Limiar de confiança para validar a detecção (0.0 a 1.0)
+LIMIAR_CONFIANCA = 0.0
 # ==========================================================
 
 print(f"\n[Fase 1] Treinando WiSARD para Tempo Real (Modo: {MODO_BINARIZACAO.upper()})...")
@@ -36,13 +39,13 @@ for arq in glob.glob("images/train/*.*"):
     gabaritos = ler_gabarito_yolo(arq, w_img, h_img)
     
     mask_lar, mask_br = gerar_mascaras(img, ESTADO)
-    mask_canny = gerar_canny(img, ESTADO) # <-- NOVO
+    mask_canny = gerar_canny(img, ESTADO)
     
     # 1. Extração de Gabaritos
     for x, y, w, h in gabaritos:
         x, y = max(0, x), max(0, y)
         c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
-        c_canny = mask_canny[y:y+h, x:x+w] # <-- NOVO
+        c_canny = mask_canny[y:y+h, x:x+w]
         
         if c_lar.size > 0:
             c_lar, c_br, c_canny = alinhar_cone_vertical(c_lar, c_br, c_canny, limiar_ar=LIMIAR_AR_CONE)
@@ -54,7 +57,7 @@ for arq in glob.glob("images/train/*.*"):
         x, y, w, h = cand
         x, y = max(0, x), max(0, y)
         c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
-        c_canny = mask_canny[y:y+h, x:x+w] # <-- NOVO
+        c_canny = mask_canny[y:y+h, x:x+w]
         
         if c_lar.size == 0: continue
         
@@ -70,7 +73,7 @@ for arq in glob.glob("images/train/*.*"):
 random.seed(42)
 random.shuffle(fundos_X)
 fundos_X = fundos_X[:len(cones_X)]
-modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO)
+modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO, returnConfidence=True)
 modelo.train(wp.DataSet(cones_X + fundos_X, ['cone']*len(cones_X) + ['nao_cone']*len(fundos_X)))
 
 print("\n[Fase 2] Abrindo a Webcam...")
@@ -89,7 +92,7 @@ while True:
     h_img, w_img = frame.shape[:2]
     
     mask_lar, mask_br = gerar_mascaras(frame, ESTADO)
-    mask_canny = gerar_canny(frame, ESTADO) # <-- NOVO
+    mask_canny = gerar_canny(frame, ESTADO)
     
     candidatos = extrair_candidatos_multiplos(mask_lar, mask_br, w_img, h_img, ESTADO)
     
@@ -98,6 +101,7 @@ while True:
     # ==========================================================
     for caixas_antigas in memoria_caixas:
         for box_antiga in caixas_antigas:
+            # box_antiga já é apenas a tupla (x,y,w,h)
             if box_antiga not in candidatos:
                 candidatos.append(box_antiga)
     # ==========================================================
@@ -114,7 +118,7 @@ while True:
             if y + h > h_img: h = h_img - y
             
             c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
-            c_canny = mask_canny[y:y+h, x:x+w] # <-- NOVO
+            c_canny = mask_canny[y:y+h, x:x+w]
             
             if c_lar.size > 0:
                 c_lar, c_br, c_canny = alinhar_cone_vertical(c_lar, c_br, c_canny, limiar_ar=LIMIAR_AR_CONE)
@@ -122,29 +126,54 @@ while True:
                 candidatos_validos.append((x, y, w, h))
                 
         if recortes:
-            preds = modelo.classify(wp.DataSet(recortes))
-            aprovadas_raw = [candidatos_validos[i] for i, p in enumerate(preds) if p == 'cone']
+            # <-- MUDANÇA AQUI: Usando modelo.rank() em vez de modelo.classify()
+            votos_preds = modelo.rank(wp.DataSet(recortes))
             
-            # Filtro NMS Corrigido para Caixas Aninhadas
-            for box_raw in sorted(aprovadas_raw, key=lambda b: b[2]*b[3], reverse=True):
-                if not any(calcular_iom(box_raw, b_apr) > 0.6 for b_apr in caixas_filtradas):
-                    caixas_filtradas.append(box_raw)
+            candidatos_com_score = []
+            for i, votos_dict in enumerate(votos_preds):
+                classe_predita = max(votos_dict, key=votos_dict.get)
+                
+                votos_vencedor = votos_dict[classe_predita]
+                total_votos = sum(votos_dict.values())
+                
+                confianca = votos_vencedor / total_votos if total_votos > 0 else 0.0
+                
+                if classe_predita == 'cone' and confianca >= LIMIAR_CONFIANCA:
+                    candidatos_com_score.append({
+                        'box': candidatos_validos[i],
+                        'score': confianca
+                    })
+            
+            # Filtro NMS Corrigido para Caixas Aninhadas (agora trabalhando com dicionários)
+            candidatos_com_score.sort(key=lambda item: item['box'][2] * item['box'][3], reverse=True)
+            for item in candidatos_com_score:
+                box_raw = item['box']
+                if not any(calcular_iom(box_raw, b_apr['box']) > 0.6 for b_apr in caixas_filtradas):
+                    caixas_filtradas.append(item)
                     
             if EXIBIR_TODAS_CAIXAS:
                 for idx, box in enumerate(candidatos_validos):
-                    cor = (0, 255, 0) if preds[idx] == 'cone' else (0, 0, 255)
-                    cv2.rectangle(frame, (box[0], box[1]), (box[0]+box[2], box[1]+box[3]), cor, 1 if preds[idx] != 'cone' else 2)
+                    votos_dict = votos_preds[idx]
+                    classe_box = max(votos_dict, key=votos_dict.get)
+                    cor = (0, 255, 0) if classe_box == 'cone' else (0, 0, 255)
+                    espessura = 2 if classe_box == 'cone' else 1
+                    cv2.rectangle(frame, (box[0], box[1]), (box[0]+box[2], box[1]+box[3]), cor, espessura)
 
     # ==========================================================
     # ATUALIZAÇÃO DA MEMÓRIA
     # ==========================================================
-    memoria_caixas.append(caixas_filtradas)
+    # Guarda apenas a tupla de coordenadas (box) na memória, ignorando o score
+    boxes_para_memoria = [item['box'] for item in caixas_filtradas]
+    memoria_caixas.append(boxes_para_memoria)
     # ==========================================================
 
     if not EXIBIR_TODAS_CAIXAS:
-        for box in caixas_filtradas:
+        for item in caixas_filtradas:
+            box = item['box']
+            score = item['score']
             cv2.rectangle(frame, (box[0], box[1]), (box[0]+box[2], box[1]+box[3]), (0, 255, 0), 2)
-            cv2.putText(frame, "Cone", (box[0], box[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            # <-- MUDANÇA AQUI: Inserindo a confiança formatada com 2 casas decimais no putText
+            cv2.putText(frame, f"Cone {score:.2f}", (box[0], box[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     
     t_fim = time.perf_counter()
     fps_medio = (fps_medio * 0.9) + ((1.0 / (t_fim - t_inicio)) * 0.1)

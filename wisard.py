@@ -17,8 +17,11 @@ RESOLUCAO = 64
 TUPLA = 16
 IGN_ZERO = False
 
-EXIBIR_TODAS_CAIXAS = False
+EXIBIR_TODAS_CAIXAS = True
 LIMIAR_AR_CONE = 1.25
+
+# --- NOVO: Limiar de Confiança (0.0 mantém o comportamento original) ---
+LIMIAR_CONFIANCA = 0.0
 # ==========================================================
 
 if __name__ == "__main__":
@@ -71,10 +74,10 @@ if __name__ == "__main__":
     y_train = ['cone'] * len(cones_X) + ['nao_cone'] * len(fundos_X)
     
     print(f"\n[Fase 2] Treinando WiSARD (Res={RESOLUCAO}, Tupla={TUPLA})...")
-    modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO)
+    # Ativa o retorno de confiança na criação do modelo
+    modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO, returnConfidence=True)
     modelo.train(wp.DataSet(X_train, y_train))
 
-    # Atualizado para receber o modo de binarização
     salvar_imagem_mental(modelo, resolucao=RESOLUCAO, modo=MODO_BINARIZACAO)
 
     print("\n[Fase 3] Rodando Inferência no Conjunto de Teste End-to-End...")
@@ -110,24 +113,58 @@ if __name__ == "__main__":
                     candidatos_validos.append((x, y, w, h))
                     
             if recortes:
-                preds = modelo.classify(wp.DataSet(recortes))
-                aprovadas_raw = [candidatos_validos[i] for i, p in enumerate(preds) if p == 'cone']
-                # Filtro NMS Corrigido para Caixas Aninhadas
-                for box_raw in sorted(aprovadas_raw, key=lambda b: b[2]*b[3], reverse=True):
-                    # Usando IoM! Se uma caixa estiver 60% ou mais engolida por outra, é deletada.
-                    if not any(calcular_iom(box_raw, b_apr) > 0.6 for b_apr in caixas_filtradas):
-                        caixas_filtradas.append(box_raw)
+                # 1. Empacota com DataSet para evitar o TypeError da lib C++
+                dataset_test = wp.DataSet(recortes)
+                votos_preds = modelo.rank(dataset_test)
 
-                # --- EXIBIR TODAS AS CAIXAS ---
+                candidatos_com_score = []
+                for i, votos_dict in enumerate(votos_preds):
+                    
+                    # Descobre a classe vencedora (a que teve mais votos)
+                    classe_predita = max(votos_dict, key=votos_dict.get)
+                    
+                    # Calcula a confiança: (votos da classe vencedora) / (total de votos possíveis ou soma dos votos)
+                    votos_vencedor = votos_dict[classe_predita]
+                    total_votos = sum(votos_dict.values())
+                    
+                    # Evita divisão por zero
+                    if total_votos > 0:
+                        confianca = votos_vencedor / total_votos
+                    else:
+                        confianca = 0.0
+
+                    if classe_predita == 'cone' and confianca >= LIMIAR_CONFIANCA:
+                        candidatos_com_score.append({
+                            'box': candidatos_validos[i],
+                            'score': confianca
+                        })
+
+                # 3. NMS Original: Ordenado por ÁREA (Largura * Altura), e não mais por Confiança
+                candidatos_com_score.sort(key=lambda item: item['box'][2] * item['box'][3], reverse=True)
+                
+                for item in candidatos_com_score:
+                    box_raw = item['box']
+                    # Usando IoM! Compara a caixa atual com as caixas já aprovadas
+                    if not any(calcular_iom(box_raw, b_apr['box']) > 0.6 for b_apr in caixas_filtradas):
+                        caixas_filtradas.append(item)
+
+                # --- EXIBIR TODAS AS CAIXAS (DEBUG) ---
                 if EXIBIR_TODAS_CAIXAS:
                     for idx, box in enumerate(candidatos_validos):
-                        cor = (0, 255, 0) if preds[idx] == 'cone' else (0, 0, 255)
-                        cv2.rectangle(img, (box[0], box[1]), (box[0]+box[2], box[1]+box[3]), cor, 1 if preds[idx] != 'cone' else 2)
+                        votos_dict = votos_preds[idx]
+                        classe_box = max(votos_dict, key=votos_dict.get) # Pega a classe vencedora
+                        
+                        cor = (0, 255, 0) if classe_box == 'cone' else (0, 0, 255)
+                        espessura = 2 if classe_box == 'cone' else 1
+                        cv2.rectangle(img, (box[0], box[1]), (box[0]+box[2], box[1]+box[3]), cor, espessura)
 
         tempos.append((time.perf_counter() - t0) * 1000)
         
         gab_det_ofc, gab_det_rel = set(), set()
-        for box in caixas_filtradas:
+        
+        # Avaliação extrai o 'box' do dicionário filtrado
+        for item in caixas_filtradas:
+            box = item['box']
             melhor_iou, idx_gab = max([(calcular_iou(box, g), i) for i, g in enumerate(gabaritos)], default=(0.0, -1))
             is_tp = False
             if melhor_iou >= 0.50:
@@ -141,12 +178,15 @@ if __name__ == "__main__":
                 gab_det_rel.add(idx_gab)
             if not is_tp: fp += 1
                 
-        # --- EXIBIÇÃO PADRÃO SE A VARIÁVEL FOR FALSE ---
+        # --- EXIBIÇÃO PADRÃO COM SCORE NA TELA ---
         if not EXIBIR_TODAS_CAIXAS:
-            for box in caixas_filtradas:
-                x, y, w, h = box
+            for item in caixas_filtradas:
+                x, y, w, h = item['box']
+                score = item['score']
                 cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                cv2.putText(img, "Cone", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                # Formata a string para exibir o texto + confianca (ex: "Cone 0.85")
+                texto_label = f"Cone {score:.2f}"
+                cv2.putText(img, texto_label, (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                 
         cv2.imwrite(os.path.join(pasta_saida, os.path.basename(arq)), img)
 
