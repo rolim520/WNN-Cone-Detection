@@ -198,3 +198,109 @@ def calcular_iom(boxA, boxB):
     areaB = boxB[2] * boxB[3]
     
     return area_inter / float(min(areaA, areaB))
+
+def alinhar_cone_vertical(c_lar, c_br, limiar_ar=1.25):
+    """
+    Força o recorte do cone a ficar na vertical.
+    Usa a densidade de pixels laranjas para descobrir onde está a ponta.
+    """
+    h, w = c_lar.shape
+    if h == 0 or w == 0: 
+        return c_lar, c_br
+
+    ar = max(w, h) / float(min(w, h))
+    
+    # Se a imagem for muito pequena, retorna sem mexer para evitar erros
+    if h * w < 10: 
+        return c_lar, c_br
+
+    # Função auxiliar para calcular o percentual de laranja (densidade)
+    def densidade(recorte):
+        if recorte.size == 0: return 1.0 # Penaliza recortes vazios
+        return cv2.countNonZero(recorte) / float(recorte.size)
+
+    angulo_rotacao = 0
+
+    if ar > limiar_ar:
+        # É claramente vertical ou horizontal
+        if h > w: # Está na Vertical
+            meio = h // 2
+            cima = c_lar[:meio, :]
+            baixo = c_lar[meio:, :]
+            
+            # Se a ponta estiver embaixo, vira de cabeça para cima
+            if densidade(baixo) < densidade(cima):
+                angulo_rotacao = 180
+        else: # Está na Horizontal
+            meio = w // 2
+            esq = c_lar[:, :meio]
+            dir = c_lar[:, meio:]
+            
+            if densidade(esq) < densidade(dir):
+                # Ponta na esquerda -> rotacionar 90 graus horário para ficar para cima
+                angulo_rotacao = -90 
+            else:
+                # Ponta na direita -> rotacionar 90 graus anti-horário
+                angulo_rotacao = 90
+    else:
+        # É mais "quadrado" (provavelmente diagonal). Fazemos a checagem dupla.
+        meio_y, meio_x = h // 2, w // 2
+        cima = c_lar[:meio_y, :]
+        baixo = c_lar[meio_y:, :]
+        esq = c_lar[:, :meio_x]
+        dir = c_lar[:, meio_x:]
+
+        densidades = {
+            0: densidade(cima),      # Topo já está em cima
+            180: densidade(baixo),   # Topo embaixo
+            -90: densidade(esq),     # Topo na esquerda
+            90: densidade(dir)       # Topo na direita
+        }
+        # Pega a rotação que aponta para o menor percentual de laranja
+        angulo_rotacao = min(densidades, key=densidades.get)
+
+    # Aplica a rotação do OpenCV nos recortes
+    if angulo_rotacao != 0:
+        if angulo_rotacao == 180:
+            c_lar = cv2.rotate(c_lar, cv2.ROTATE_180)
+            c_br = cv2.rotate(c_br, cv2.ROTATE_180)
+        elif angulo_rotacao == 90:
+            c_lar = cv2.rotate(c_lar, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            c_br = cv2.rotate(c_br, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif angulo_rotacao == -90:
+            c_lar = cv2.rotate(c_lar, cv2.ROTATE_90_CLOCKWISE)
+            c_br = cv2.rotate(c_br, cv2.ROTATE_90_CLOCKWISE)
+
+    return c_lar, c_br
+
+def salvar_imagem_mental(modelo, resolucao=64):
+    """
+    Extrai os padrões aprendidos pela WiSARD para TODAS as classes.
+    Gera um PNG para cada classe (Esquerda: Laranja | Direita: Branco).
+    """
+    patterns = modelo.getMentalImages()
+    tamanho_metade = resolucao * resolucao
+    
+    def normalizar_para_imagem(img_mental):
+        img_min, img_max = img_mental.min(), img_mental.max()
+        if img_max > img_min:
+            return ((img_mental - img_min) / (img_max - img_min) * 255.0).astype(np.uint8)
+        return (img_mental * 0).astype(np.uint8)
+
+    for classe, padrao_lista in patterns.items():
+        padrao = np.array(padrao_lista, dtype=np.float32)
+        
+        if len(padrao) != (2 * tamanho_metade):
+            print(f"[!] Erro no tamanho da imagem mental para a classe '{classe}'.")
+            continue
+            
+        mental_laranja = padrao[:tamanho_metade].reshape((resolucao, resolucao))
+        mental_branco = padrao[tamanho_metade:].reshape((resolucao, resolucao))
+        
+        img_lar_norm = normalizar_para_imagem(mental_laranja)
+        img_br_norm = normalizar_para_imagem(mental_branco)
+        
+        imagem_final = cv2.hconcat([img_lar_norm, img_br_norm])
+        nome_arquivo = f"mental_image_{classe}.png"
+        cv2.imwrite(nome_arquivo, imagem_final)
+        print(f"[*] Imagem Mental salva: {nome_arquivo}")

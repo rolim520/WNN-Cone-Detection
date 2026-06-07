@@ -14,6 +14,7 @@ TUPLA = 16
 IGN_ZERO = False
 LARGURA_WEBCAM = 640
 EXIBIR_TODAS_CAIXAS = False
+LIMIAR_AR_CONE = 1.25
 
 # ==========================================================
 # PARÂMETRO DE RASTREAMENTO TEMPORAL
@@ -31,20 +32,27 @@ for arq in glob.glob("images/train/*.*"):
     gabaritos = ler_gabarito_yolo(arq, w_img, h_img)
     mask_lar, mask_br = gerar_mascaras(img, ESTADO)
     
+    # 1. Extração de Gabaritos
     for x, y, w, h in gabaritos:
         c_lar, c_br = mask_lar[max(0,y):y+h, max(0,x):x+w], mask_br[max(0,y):y+h, max(0,x):x+w]
         if c_lar.size > 0:
+            c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE) # <-- NOVO
             for v_lar, v_br in augmentar_recorte_mascaras(c_lar, c_br):
                 cones_X.append(binarizar_para_resolucao(v_lar, v_br, RESOLUCAO))
                 
+    # 2. Extração de Candidatos para Treino (Fundos e Cones)
     for cand in extrair_candidatos_multiplos(mask_lar, mask_br, w_img, h_img, ESTADO):
         x, y, w, h = cand
         c_lar, c_br = mask_lar[max(0,y):y+h, max(0,x):x+w], mask_br[max(0,y):y+h, max(0,x):x+w]
         if c_lar.size == 0: continue
+        
         iou = max([calcular_iou(cand, gab) for gab in gabaritos], default=0.0)
+        
         if iou <= ESTADO['iou_negativo']:
+            c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE) # <-- NOVO
             fundos_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
         elif iou >= ESTADO['iou_positivo']:
+            c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE) # <-- NOVO
             cones_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
 
 random.seed(42)
@@ -74,7 +82,6 @@ while True:
     # ==========================================================
     # INJEÇÃO DE MEMÓRIA (TRACKING)
     # ==========================================================
-    # Adiciona os cones aprovados dos frames anteriores à lista de candidatos atuais
     for caixas_antigas in memoria_caixas:
         for box_antiga in caixas_antigas:
             if box_antiga not in candidatos:
@@ -85,14 +92,16 @@ while True:
     
     if candidatos:
         recortes, candidatos_validos = [], []
+        
+        # 3. Extração da Câmera em Tempo Real
         for (x, y, w, h) in candidatos:
-            # Proteção extra para garantir que a caixa da memória não estoure os limites da imagem atual
             x, y = max(0, x), max(0, y)
             if x + w > w_img: w = w_img - x
             if y + h > h_img: h = h_img - y
             
             c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
             if c_lar.size > 0:
+                c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE) # <-- NOVO
                 recortes.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
                 candidatos_validos.append((x, y, w, h))
                 
@@ -102,7 +111,6 @@ while True:
             
             # Filtro NMS Corrigido para Caixas Aninhadas
             for box_raw in sorted(aprovadas_raw, key=lambda b: b[2]*b[3], reverse=True):
-                # Usando IoM! Se uma caixa estiver 60% ou mais engolida por outra, é deletada.
                 if not any(calcular_iom(box_raw, b_apr) > 0.6 for b_apr in caixas_filtradas):
                     caixas_filtradas.append(box_raw)
                     
@@ -114,7 +122,6 @@ while True:
     # ==========================================================
     # ATUALIZAÇÃO DA MEMÓRIA
     # ==========================================================
-    # Salva APENAS as caixas finais e limpas (aprovadas e filtradas) para os próximos frames
     memoria_caixas.append(caixas_filtradas)
     # ==========================================================
 

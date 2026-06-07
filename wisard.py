@@ -12,7 +12,8 @@ ESTADO = carregar_configuracoes()
 RESOLUCAO = 64
 TUPLA = 16
 IGN_ZERO = False
-EXIBIR_TODAS_CAIXAS = True
+EXIBIR_TODAS_CAIXAS = False
+LIMIAR_AR_CONE = 1.25
 
 if __name__ == "__main__":
     print("="*60)
@@ -31,6 +32,7 @@ if __name__ == "__main__":
         for x, y, w, h in gabaritos:
             c_lar, c_br = mask_lar[max(0,y):y+h, max(0,x):x+w], mask_br[max(0,y):y+h, max(0,x):x+w]
             if c_lar.size > 0:
+                c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE)
                 for v_lar, v_br in augmentar_recorte_mascaras(c_lar, c_br):
                     cones_X.append(binarizar_para_resolucao(v_lar, v_br, RESOLUCAO))
         
@@ -40,6 +42,7 @@ if __name__ == "__main__":
             if c_lar.size == 0: continue
             iou = max([calcular_iou(cand, gab) for gab in gabaritos], default=0.0)
             if iou <= ESTADO['iou_negativo']:
+                c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE)
                 fundos_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
             elif iou >= ESTADO['iou_positivo']:
                 cones_X.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
@@ -53,6 +56,8 @@ if __name__ == "__main__":
     print(f"\n[Fase 2] Treinando WiSARD (Res={RESOLUCAO}, Tupla={TUPLA})...")
     modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO)
     modelo.train(wp.DataSet(X_train, y_train))
+
+    salvar_imagem_mental(modelo, resolucao=RESOLUCAO)
 
     print("\n[Fase 3] Rodando Inferência no Conjunto de Teste End-to-End...")
     pasta_saida = "resultados_finais"
@@ -77,6 +82,7 @@ if __name__ == "__main__":
             for (x, y, w, h) in candidatos:
                 c_lar, c_br = mask_lar[max(0,y):y+h, max(0,x):x+w], mask_br[max(0,y):y+h, max(0,x):x+w]
                 if c_lar.size > 0:
+                    c_lar, c_br = alinhar_cone_vertical(c_lar, c_br, limiar_ar=LIMIAR_AR_CONE)
                     recortes.append(binarizar_para_resolucao(c_lar, c_br, RESOLUCAO))
                     candidatos_validos.append((x, y, w, h))
                     
@@ -88,6 +94,12 @@ if __name__ == "__main__":
                     # Usando IoM! Se uma caixa estiver 60% ou mais engolida por outra, é deletada.
                     if not any(calcular_iom(box_raw, b_apr) > 0.6 for b_apr in caixas_filtradas):
                         caixas_filtradas.append(box_raw)
+
+                # --- EXIBIR TODAS AS CAIXAS (Lógica copiada do realtime_detect) ---
+                if EXIBIR_TODAS_CAIXAS:
+                    for idx, box in enumerate(candidatos_validos):
+                        cor = (0, 255, 0) if preds[idx] == 'cone' else (0, 0, 255)
+                        cv2.rectangle(img, (box[0], box[1]), (box[0]+box[2], box[1]+box[3]), cor, 1 if preds[idx] != 'cone' else 2)
 
         tempos.append((time.perf_counter() - t0) * 1000)
         
@@ -106,10 +118,13 @@ if __name__ == "__main__":
                 gab_det_rel.add(idx_gab)
             if not is_tp: fp += 1
                 
-        for box in caixas_filtradas:
-            x, y, w, h = box
-            cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            cv2.putText(img, "Cone", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        # --- EXIBIÇÃO PADRÃO SE A VARIÁVEL FOR FALSE ---
+        if not EXIBIR_TODAS_CAIXAS:
+            for box in caixas_filtradas:
+                x, y, w, h = box
+                cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                cv2.putText(img, "Cone", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                
         cv2.imwrite(os.path.join(pasta_saida, os.path.basename(arq)), img)
 
     precisao = (tp_ofc / (tp_ofc + fp)) * 100 if (tp_ofc + fp) > 0 else 0
