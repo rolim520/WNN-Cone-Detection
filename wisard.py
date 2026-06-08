@@ -5,6 +5,7 @@ import glob
 import time
 import random
 import gc
+import json
 import wisardpkg as wp
 from utils import *
 
@@ -23,7 +24,7 @@ LIMIAR_AR_CONE = 1.25
 LIMIAR_CONFIANCA = 0.0
 
 # --- Execuções Múltiplas para Cálculo de Incerteza ---
-NUM_EXECUCOES = 10
+NUM_EXECUCOES = 100
 # ==========================================================
 
 if __name__ == "__main__":
@@ -129,11 +130,12 @@ if __name__ == "__main__":
     
     resultados = {
         'map50': [], 'map50_95': [], 'precisao': [], 
-        'recall': [], 'f1': [], 'iou': [], 'tempo': []
+        'recall': [], 'f1': [], 'iou': [], 'tempo_inferencia': [], 'tempo_treino': []
     }
     
     melhor_f1_global = -1.0
     melhores_caixas_por_imagem = {}
+    metricas_melhor_modelo = {}
 
     for rodada in range(NUM_EXECUCOES):
         print(f"\n--- RODADA {rodada+1}/{NUM_EXECUCOES} ---")
@@ -154,8 +156,10 @@ if __name__ == "__main__":
         X_train, y_train = list(X_train), list(y_train)
         
         # 2. Treinamento
+        t0_train = time.perf_counter()
         modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO, returnConfidence=True)
         modelo.train(wp.DataSet(X_train, y_train))
+        tempo_treino_rodada = time.perf_counter() - t0_train
                     
         # 3. Inferência (Usando o Cache)
         tempos_rodada, ious_acertos_rodada = [], []
@@ -244,7 +248,7 @@ if __name__ == "__main__":
         iou_medio_r = np.mean(ious_acertos_rodada) * 100 if ious_acertos_rodada else 0.0
         tempo_medio_r = np.mean(tempos_rodada)
 
-        print(f" -> mAP@50: {map50_r*100:.2f}% | F1: {f1_r:.2f}% (P: {precisao_r:.2f}%, R: {recall_r:.2f}%)")
+        print(f" -> Treino: {tempo_treino_rodada:.2f}s | mAP@50: {map50_r*100:.2f}% | F1: {f1_r:.2f}%")
 
         # =====================================================================
         # Salva modelos, imagens mentais e predições apenas se for o melhor
@@ -252,6 +256,17 @@ if __name__ == "__main__":
         if f1_r > melhor_f1_global:
             melhor_f1_global = f1_r
             print(f"    [!] Novo melhor modelo (F1: {f1_r:.2f}%). Guardando configurações...")
+            
+            metricas_melhor_modelo = {
+                'map50': map50_r * 100,
+                'map50_95': map50_95_r * 100,
+                'precisao': precisao_r,
+                'recall': recall_r,
+                'f1': f1_r,
+                'iou': iou_medio_r,
+                'tempo_treino': tempo_treino_rodada,
+                'tempo_inferencia': tempo_medio_r
+            }
             
             melhores_caixas_por_imagem = caixas_da_rodada.copy()
 
@@ -292,7 +307,8 @@ if __name__ == "__main__":
         resultados['recall'].append(recall_r)
         resultados['f1'].append(f1_r)
         resultados['iou'].append(iou_medio_r)
-        resultados['tempo'].append(tempo_medio_r)
+        resultados['tempo_inferencia'].append(tempo_medio_r)
+        resultados['tempo_treino'].append(tempo_treino_rodada)
         
         # Limpar memória RAM do modelo antigo
         del modelo
@@ -335,19 +351,31 @@ if __name__ == "__main__":
     # RELATÓRIO FINAL E EXPORTAÇÃO JSON
     # =========================================================================
     print("\n" + "="*60)
-    print(f" RESULTADO FINAL ({NUM_EXECUCOES} RODADAS) - MÉDIA ± INCERTEZA")
+    print(f" RESULTADO FINAL ({NUM_EXECUCOES} RODADAS)")
     print("="*60)
-    print(f" -> mAP@50      : {np.mean(resultados['map50']):.2f}% ± {np.std(resultados['map50']):.2f}%")
-    print(f" -> mAP@50-95   : {np.mean(resultados['map50_95']):.2f}% ± {np.std(resultados['map50_95']):.2f}%")
-    print(f" -> Precisão    : {np.mean(resultados['precisao']):.2f}% ± {np.std(resultados['precisao']):.2f}%")
-    print(f" -> Recall      : {np.mean(resultados['recall']):.2f}% ± {np.std(resultados['recall']):.2f}%")
-    print(f" -> F1-Score    : {np.mean(resultados['f1']):.2f}% ± {np.std(resultados['f1']):.2f}%")
-    print(f" -> Média de IoU: {np.mean(resultados['iou']):.2f}% ± {np.std(resultados['iou']):.2f}%")
-    print(f" -> Velocidade  : {np.mean(resultados['tempo']):.2f} ± {np.std(resultados['tempo']):.2f} ms por imagem")
+    print(" [MÉDIA ± INCERTEZA]")
+    print(f" -> mAP@50         : {np.mean(resultados['map50']):.2f}% ± {np.std(resultados['map50']):.2f}%")
+    print(f" -> mAP@50-95      : {np.mean(resultados['map50_95']):.2f}% ± {np.std(resultados['map50_95']):.2f}%")
+    print(f" -> Precisão       : {np.mean(resultados['precisao']):.2f}% ± {np.std(resultados['precisao']):.2f}%")
+    print(f" -> Recall         : {np.mean(resultados['recall']):.2f}% ± {np.std(resultados['recall']):.2f}%")
+    print(f" -> F1-Score       : {np.mean(resultados['f1']):.2f}% ± {np.std(resultados['f1']):.2f}%")
+    print(f" -> Média de IoU   : {np.mean(resultados['iou']):.2f}% ± {np.std(resultados['iou']):.2f}%")
+    print(f" -> T. Treino/Ciclo: {np.mean(resultados['tempo_treino']):.4f}s ± {np.std(resultados['tempo_treino']):.4f}s")
+    print(f" -> T. Inf./Imagem : {np.mean(resultados['tempo_inferencia']):.2f}ms ± {np.std(resultados['tempo_inferencia']):.2f}ms")
+    print("-" * 60)
+    print(" [MÉTRICAS DO MELHOR MODELO (Top F1)]")
+    if metricas_melhor_modelo:
+        print(f" -> mAP@50         : {metricas_melhor_modelo['map50']:.2f}%")
+        print(f" -> mAP@50-95      : {metricas_melhor_modelo['map50_95']:.2f}%")
+        print(f" -> Precisão       : {metricas_melhor_modelo['precisao']:.2f}%")
+        print(f" -> Recall         : {metricas_melhor_modelo['recall']:.2f}%")
+        print(f" -> F1-Score       : {metricas_melhor_modelo['f1']:.2f}%")
+        print(f" -> Média de IoU   : {metricas_melhor_modelo['iou']:.2f}%")
+        print(f" -> Tempo Treino   : {metricas_melhor_modelo['tempo_treino']:.4f}s")
+        print(f" -> Tempo Inferencia: {metricas_melhor_modelo['tempo_inferencia']:.2f}ms")
+    print("="*60)
 
     # Estruturando e Salvando JSON
-    import json
-    
     relatorio_json = {
         "configuracoes": {
             "num_execucoes": NUM_EXECUCOES,
@@ -358,14 +386,16 @@ if __name__ == "__main__":
             "limiar_ar_cone": LIMIAR_AR_CONE,
             "limiar_confianca": LIMIAR_CONFIANCA
         },
-        "sumario": {
+        "melhor_modelo": {k: float(v) for k, v in metricas_melhor_modelo.items()},
+        "sumario_medias": {
             "map50": {"media": float(np.mean(resultados['map50'])), "incerteza": float(np.std(resultados['map50']))},
             "map50_95": {"media": float(np.mean(resultados['map50_95'])), "incerteza": float(np.std(resultados['map50_95']))},
             "precisao": {"media": float(np.mean(resultados['precisao'])), "incerteza": float(np.std(resultados['precisao']))},
             "recall": {"media": float(np.mean(resultados['recall'])), "incerteza": float(np.std(resultados['recall']))},
             "f1_score": {"media": float(np.mean(resultados['f1'])), "incerteza": float(np.std(resultados['f1']))},
             "iou_medio": {"media": float(np.mean(resultados['iou'])), "incerteza": float(np.std(resultados['iou']))},
-            "velocidade_ms": {"media": float(np.mean(resultados['tempo'])), "incerteza": float(np.std(resultados['tempo']))}
+            "tempo_treino_s": {"media": float(np.mean(resultados['tempo_treino'])), "incerteza": float(np.std(resultados['tempo_treino']))},
+            "tempo_inferencia_ms": {"media": float(np.mean(resultados['tempo_inferencia'])), "incerteza": float(np.std(resultados['tempo_inferencia']))}
         },
         "historico_rodadas": {
             "map50": [float(x) for x in resultados['map50']],
@@ -374,7 +404,8 @@ if __name__ == "__main__":
             "recall": [float(x) for x in resultados['recall']],
             "f1": [float(x) for x in resultados['f1']],
             "iou": [float(x) for x in resultados['iou']],
-            "tempo": [float(x) for x in resultados['tempo']]
+            "tempo_treino": [float(x) for x in resultados['tempo_treino']],
+            "tempo_inferencia": [float(x) for x in resultados['tempo_inferencia']]
         }
     }
     
@@ -382,6 +413,4 @@ if __name__ == "__main__":
     with open(nome_arquivo_json, 'w', encoding='utf-8') as f:
         json.dump(relatorio_json, f, indent=4, ensure_ascii=False)
         
-    print("\n" + "="*60)
-    print(f"[*] Resultados exportados com sucesso para: {nome_arquivo_json}")
-    print("="*60)
+    print(f"\n[*] Resultados exportados com sucesso para: {nome_arquivo_json}")
