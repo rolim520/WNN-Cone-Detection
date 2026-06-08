@@ -29,7 +29,7 @@ LIMIAR_AR_CONE = 1.25
 LIMIAR_CONFIANCA = 0.0
 
 # --- Execuções Múltiplas para Cálculo de Incerteza ---
-NUM_EXECUCOES = 10
+NUM_EXECUCOES = 100
 # ==========================================================
 
 if __name__ == "__main__":

@@ -3,5 +3,5 @@ venv
 labels
 images
 Cones
-resultados_wisard
-resultados_cluswisard
+resultados_wisard/melhor_modelo.json
+resultados_cluswisard/melhor_modelo.json
