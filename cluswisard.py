@@ -18,9 +18,9 @@ IGN_ZERO = False
 
 # --- Parâmetros Vencedores do Grid Search ---
 TUPLA = 16
-MIN_SCORE = 0.7
-THRESHOLD = 2500
-DISC_LIMIT = 5
+MIN_SCORE = 0.8
+THRESHOLD = 2000
+DISC_LIMIT = 2
 
 EXIBIR_TODAS_CAIXAS = False
 LIMIAR_AR_CONE = 1.25

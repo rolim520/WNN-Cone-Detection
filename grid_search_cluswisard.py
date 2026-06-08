@@ -16,15 +16,15 @@ from utils import *
 # ==========================================================
 ESTADO = carregar_configuracoes()
 
-GRID_MODOS = ['cor'] 
+GRID_MODOS = ['cor', 'hibrido', 'canny'] 
 GRID_RESOLUCOES = [64] 
-GRID_ADDRESS_SIZE = [16, 20, 24, 28]
+GRID_ADDRESS_SIZE = [16, 20, 24]
 GRID_IGNORE_ZERO = [False]
 
 # Novos Parâmetros Exclusivos da ClusWisard
-GRID_MIN_SCORE = [0.5, 0.7, 0.8]
-GRID_THRESHOLD = [786, 1573, 2500]      # Valores atualizados!
-GRID_DISC_LIMIT = [5, 15]          
+GRID_MIN_SCORE = [0.5, 0.7, 0.8, 0.9]
+GRID_THRESHOLD = [1500, 2000, 2500, 3200, 4000]
+GRID_DISC_LIMIT = [2, 3, 4, 5, 7, 10]          
 
 NUM_EXECUCOES = 5
 LIMIAR_AR_CONE = 1.25
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     tempo_inicial = time.perf_counter()
     
     # Reduzir núcleos para garantir estabilidade com imagens 64x64
-    max_workers = min(6, multiprocessing.cpu_count())
+    max_workers = min(12, multiprocessing.cpu_count())
     
     print(f" -> Iniciando Pool com {max_workers} workers.")
     print(" -> maxtasksperchild=1 ativado: A memória C++ será destruída a cada iteração.\n")
@@ -285,7 +285,7 @@ if __name__ == "__main__":
     # =========================================================================
     # NOVO: SALVAR RESULTADOS EM JSON
     # =========================================================================
-    nome_arquivo_json = f"resultados_grid_search_res{GRID_RESOLUCOES[0]}.json"
+    nome_arquivo_json = f"resultados_grid_search_cluswisard.json"
     
     with open(nome_arquivo_json, 'w', encoding='utf-8') as f:
         # indent=4 deixa o arquivo formatado e legível para humanos
