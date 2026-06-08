@@ -1,4 +1,4 @@
-# Detecção de Cones utilizando Redes Neurais sem Pesos (WiSARD e ClusWiSARD)
+# Detecção de Cones utilizando Redes Neurais sem Pesos
 
 Este repositório contém o código-fonte para um sistema de detecção de objetos focado em cones de sinalização. O pipeline combina técnicas clássicas de Visão Computacional com Redes Neurais sem Pesos (Weightless Neural Networks - WNNs), especificamente as arquiteturas **WiSARD** e **ClusWiSARD**.
 
