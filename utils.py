@@ -312,3 +312,9 @@ def gerar_canny(img_bgr, config):
     lim1 = config.get('canny_limiar1', 90)
     lim2 = config.get('canny_limiar2', 200)
     return cv2.Canny(img_bgr, int(lim1), int(lim2))
+
+def normalizar_para_imagem(img_mental):
+    img_min, img_max = img_mental.min(), img_mental.max()
+    if img_max > img_min:
+        return ((img_mental - img_min) / (img_max - img_min) * 255.0).astype(np.uint8)
+    return (img_mental * 0).astype(np.uint8)

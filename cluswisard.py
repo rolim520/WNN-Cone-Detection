@@ -10,31 +10,36 @@ from utils import *
 ESTADO = carregar_configuracoes()
 
 # ==========================================================
-# PARÂMETROS OTIMIZADOS (Refletindo o Top 1 do Grid Search)
+# PARÂMETROS OTIMIZADOS (TOP 1 - CLUSWISARD 64x64)
 # ==========================================================
 MODO_BINARIZACAO = 'cor' # Opções: 'cor', 'canny', 'hibrido'
 RESOLUCAO = 64
-TUPLA = 16
 IGN_ZERO = False
+
+# --- Parâmetros Vencedores do Grid Search ---
+TUPLA = 16
+MIN_SCORE = 0.7
+THRESHOLD = 2500
+DISC_LIMIT = 5
 
 EXIBIR_TODAS_CAIXAS = False
 LIMIAR_AR_CONE = 1.25
 
-# --- NOVO: Limiar de Confiança (0.0 mantém o comportamento original) ---
+# Limiar de Confiança (0.0 mantém o comportamento original)
 LIMIAR_CONFIANCA = 0.0
 # ==========================================================
 
 if __name__ == "__main__":
     print("="*60)
-    print(" BENCHMARK FINAL: PIPELINE SEM PESOS vs TRACON (YOLOv5)")
+    print(" BENCHMARK FINAL: CLUSWISARD vs TRACON (YOLOv5)")
     print("="*60)
     print(f" -> Modo Ativo: {MODO_BINARIZACAO.upper()}")
     
-    # 1. Cria as pastas principais e subpastas de forma segura
-    pasta_saida = "resultados_wisard"
+    # Prepara a pasta de saída (usada para inferência e imagens mentais)
+    pasta_saida = "resultados_cluswisard"
     pasta_mental = os.path.join(pasta_saida, "mental_images")
-    os.makedirs(pasta_saida, exist_ok=True)
     os.makedirs(pasta_mental, exist_ok=True)
+    os.makedirs(pasta_saida, exist_ok=True)
     
     print("\n[Fase 1] Carregando Dados de Treino...")
     cones_X, fundos_X = [], []
@@ -45,12 +50,12 @@ if __name__ == "__main__":
         gabaritos = ler_gabarito_yolo(arq, w_img, h_img)
         
         mask_lar, mask_br = gerar_mascaras(img, ESTADO)
-        mask_canny = gerar_canny(img, ESTADO) 
+        mask_canny = gerar_canny(img, ESTADO)
         
         for x, y, w, h in gabaritos:
             x, y = max(0, x), max(0, y)
             c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
-            c_canny = mask_canny[y:y+h, x:x+w] 
+            c_canny = mask_canny[y:y+h, x:x+w]
             
             if c_lar.size > 0:
                 c_lar, c_br, c_canny = alinhar_cone_vertical(c_lar, c_br, c_canny, limiar_ar=LIMIAR_AR_CONE)
@@ -61,7 +66,7 @@ if __name__ == "__main__":
             x, y, w, h = cand
             x, y = max(0, x), max(0, y)
             c_lar, c_br = mask_lar[y:y+h, x:x+w], mask_br[y:y+h, x:x+w]
-            c_canny = mask_canny[y:y+h, x:x+w] 
+            c_canny = mask_canny[y:y+h, x:x+w]
             
             if c_lar.size == 0: continue
             iou = max([calcular_iou(cand, gab) for gab in gabaritos], default=0.0)
@@ -79,38 +84,46 @@ if __name__ == "__main__":
     X_train = cones_X + fundos_X
     y_train = ['cone'] * len(cones_X) + ['nao_cone'] * len(fundos_X)
     
-    print(f"\n[Fase 2] Treinando WiSARD (Res={RESOLUCAO}, Tupla={TUPLA})...")
-    modelo = wp.Wisard(TUPLA, ignoreZero=IGN_ZERO, returnConfidence=True)
+    print(f"\n[Fase 2] Treinando ClusWiSARD (Res={RESOLUCAO}, Tupla={TUPLA})...")
+    # Instanciando a ClusWisard com os 4 parâmetros posicionais + retorno de confiança
+    modelo = wp.ClusWisard(
+        TUPLA, 
+        MIN_SCORE, 
+        THRESHOLD, 
+        DISC_LIMIT, 
+        ignoreZero=IGN_ZERO, 
+        returnConfidence=True
+    )
     modelo.train(wp.DataSet(X_train, y_train))
 
-    print("\n[*] Gerando Imagens Mentais (WiSARD Clássica)...")
+    print("\n[*] Gerando Imagens Mentais dos Sub-Clusters...")
     patterns = modelo.getMentalImages()
 
-    # A WiSARD clássica retorna 1 padrão por classe (não possui sub-discriminadores)
-    for classe, padrao_lista in patterns.items():
-        padrao = np.array(padrao_lista, dtype=np.float32)
-        tamanho_metade = RESOLUCAO * RESOLUCAO
-        imagens_concatenadas = []
-        
-        if MODO_BINARIZACAO in ['cor', 'hibrido']:
-            if len(padrao) >= 2 * tamanho_metade:
-                mental_laranja = padrao[:tamanho_metade].reshape((RESOLUCAO, RESOLUCAO))
-                mental_branco = padrao[tamanho_metade:2*tamanho_metade].reshape((RESOLUCAO, RESOLUCAO))
-                imagens_concatenadas.extend([normalizar_para_imagem(mental_laranja), normalizar_para_imagem(mental_branco)])
+    # Varre as classes ('cone', 'nao_cone')
+    for classe, cluster in patterns.items():
+        # Varre os sub-discriminadores (tipos visuais) de cada classe
+        for index, discriminator in enumerate(cluster):
+            padrao = np.array(discriminator, dtype=np.float32)
+            tamanho_metade = RESOLUCAO * RESOLUCAO
+            imagens_concatenadas = []
             
-        if MODO_BINARIZACAO in ['canny', 'hibrido']:
-            offset = 2 * tamanho_metade if MODO_BINARIZACAO == 'hibrido' else 0
-            if len(padrao) >= offset + tamanho_metade:
-                mental_canny = padrao[offset:offset+tamanho_metade].reshape((RESOLUCAO, RESOLUCAO))
-                imagens_concatenadas.append(normalizar_para_imagem(mental_canny))
-        
-        if imagens_concatenadas:
-            imagem_final = cv2.hconcat(imagens_concatenadas)
-            # Salva dentro da subpasta!
-            nome_arquivo = os.path.join(pasta_mental, f"mental_image_{classe}_{MODO_BINARIZACAO}.png")
-            cv2.imwrite(nome_arquivo, imagem_final)
-            print(f"  -> Salvo: {nome_arquivo}")
-
+            if MODO_BINARIZACAO in ['cor', 'hibrido']:
+                if len(padrao) >= 2 * tamanho_metade:
+                    mental_laranja = padrao[:tamanho_metade].reshape((RESOLUCAO, RESOLUCAO))
+                    mental_branco = padrao[tamanho_metade:2*tamanho_metade].reshape((RESOLUCAO, RESOLUCAO))
+                    imagens_concatenadas.extend([normalizar_para_imagem(mental_laranja), normalizar_para_imagem(mental_branco)])
+                
+            if MODO_BINARIZACAO in ['canny', 'hibrido']:
+                offset = 2 * tamanho_metade if MODO_BINARIZACAO == 'hibrido' else 0
+                if len(padrao) >= offset + tamanho_metade:
+                    mental_canny = padrao[offset:offset+tamanho_metade].reshape((RESOLUCAO, RESOLUCAO))
+                    imagens_concatenadas.append(normalizar_para_imagem(mental_canny))
+            
+            if imagens_concatenadas:
+                imagem_final = cv2.hconcat(imagens_concatenadas)
+                nome_arquivo = os.path.join(pasta_saida, f"mental_images/{classe}_disc_{index}_{MODO_BINARIZACAO}.png")
+                cv2.imwrite(nome_arquivo, imagem_final)
+                print(f"  -> Salvo: {nome_arquivo}")
 
     print("\n[Fase 3] Rodando Inferência no Conjunto de Teste End-to-End...")
     
@@ -125,7 +138,7 @@ if __name__ == "__main__":
         
         t0 = time.perf_counter()
         mask_lar, mask_br = gerar_mascaras(img, ESTADO)
-        mask_canny = gerar_canny(img, ESTADO) 
+        mask_canny = gerar_canny(img, ESTADO)
         
         candidatos = extrair_candidatos_multiplos(mask_lar, mask_br, img.shape[1], img.shape[0], ESTADO)
         caixas_filtradas = []
@@ -149,8 +162,13 @@ if __name__ == "__main__":
                 candidatos_com_score = []
                 for i, votos_dict in enumerate(votos_preds):
                     
-                    classe_predita = max(votos_dict, key=votos_dict.get)
-                    votos_vencedor = votos_dict[classe_predita]
+                    # classe_predita será algo como 'cone::2' ou 'nao_cone::0'
+                    classe_predita_raw = max(votos_dict, key=votos_dict.get)
+                    
+                    # Remove o '::' e pega só o prefixo real da classe ('cone' ou 'nao_cone')
+                    classe_base = classe_predita_raw.split('::')[0]
+                    
+                    votos_vencedor = votos_dict[classe_predita_raw]
                     total_votos = sum(votos_dict.values())
                     
                     if total_votos > 0:
@@ -158,12 +176,14 @@ if __name__ == "__main__":
                     else:
                         confianca = 0.0
 
-                    if classe_predita == 'cone' and confianca >= LIMIAR_CONFIANCA:
+                    # Verifica contra a classe_base e não a classe crua do cluster!
+                    if classe_base == 'cone' and confianca >= LIMIAR_CONFIANCA:
                         candidatos_com_score.append({
                             'box': candidatos_validos[i],
                             'score': confianca
                         })
 
+                # NMS Original: Ordenado por ÁREA (Largura * Altura)
                 candidatos_com_score.sort(key=lambda item: item['box'][2] * item['box'][3], reverse=True)
                 
                 for item in candidatos_com_score:
@@ -175,7 +195,8 @@ if __name__ == "__main__":
                 if EXIBIR_TODAS_CAIXAS:
                     for idx, box in enumerate(candidatos_validos):
                         votos_dict = votos_preds[idx]
-                        classe_box = max(votos_dict, key=votos_dict.get) 
+                        classe_box_raw = max(votos_dict, key=votos_dict.get)
+                        classe_box = classe_box_raw.split('::')[0] # Correção aplicada ao Debug também!
                         
                         cor = (0, 255, 0) if classe_box == 'cone' else (0, 0, 255)
                         espessura = 2 if classe_box == 'cone' else 1
@@ -200,6 +221,7 @@ if __name__ == "__main__":
                 gab_det_rel.add(idx_gab)
             if not is_tp: fp += 1
                 
+        # --- EXIBIÇÃO PADRÃO COM SCORE NA TELA ---
         if not EXIBIR_TODAS_CAIXAS:
             for item in caixas_filtradas:
                 x, y, w, h = item['box']
