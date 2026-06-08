@@ -318,3 +318,74 @@ def normalizar_para_imagem(img_mental):
     if img_max > img_min:
         return ((img_mental - img_min) / (img_max - img_min) * 255.0).astype(np.uint8)
     return (img_mental * 0).astype(np.uint8)
+
+def calcular_ap_limiar(predicoes, gabaritos, iou_thresh):
+    """Calcula a Average Precision (AP) para um limiar de IoU específico."""
+    total_gts = sum([len(boxes) for boxes in gabaritos.values()])
+    if total_gts == 0:
+        return 0.0
+
+    # Ordena as predições de todas as imagens pelo score (decrescente)
+    predicoes_ordenadas = sorted(predicoes, key=lambda x: x['score'], reverse=True)
+
+    tp = np.zeros(len(predicoes_ordenadas))
+    fp = np.zeros(len(predicoes_ordenadas))
+    gt_matched = {img_id: [False] * len(boxes) for img_id, boxes in gabaritos.items()}
+
+    for i, pred in enumerate(predicoes_ordenadas):
+        img_id = pred['img_id']
+        pred_box = pred['box']
+
+        gts_img = gabaritos.get(img_id, [])
+        best_iou = 0
+        best_gt_idx = -1
+
+        for j, gt_box in enumerate(gts_img):
+            iou = calcular_iou(pred_box, gt_box)
+            if iou > best_iou:
+                best_iou = iou
+                best_gt_idx = j
+
+        if best_iou >= iou_thresh:
+            if not gt_matched[img_id][best_gt_idx]:
+                tp[i] = 1
+                gt_matched[img_id][best_gt_idx] = True
+            else:
+                fp[i] = 1
+        else:
+            fp[i] = 1
+
+    cum_tp = np.cumsum(tp)
+    cum_fp = np.cumsum(fp)
+
+    recalls = cum_tp / total_gts
+    precisions = cum_tp / (cum_tp + cum_fp + np.finfo(float).eps)
+
+    recalls = np.concatenate(([0.0], recalls, [1.0]))
+    precisions = np.concatenate(([0.0], precisions, [0.0]))
+
+    for i in range(len(precisions) - 1, 0, -1):
+        precisions[i - 1] = np.maximum(precisions[i - 1], precisions[i])
+
+    indices = np.where(recalls[1:] != recalls[:-1])[0]
+    ap = np.sum((recalls[indices + 1] - recalls[indices]) * precisions[indices + 1])
+
+    return ap
+
+def calcular_map_coco(predicoes, gabaritos):
+    """
+    Calcula e retorna ambos: mAP@50 e mAP@50-95.
+    Itera sobre os limiares de 0.50 até 0.95 (passo 0.05).
+    """
+    # np.arange(0.50, 1.00, 0.05) gera o array [0.5, 0.55, 0.6, ..., 0.95]
+    limiares = np.arange(0.50, 1.00, 0.05) 
+    aps = []
+    
+    for limiar in limiares:
+        ap = calcular_ap_limiar(predicoes, gabaritos, limiar)
+        aps.append(ap)
+    
+    map50 = aps[0] # O primeiro cálculo sempre é o do limiar de 0.50
+    map50_95 = np.mean(aps) # A média de todos os 10 limiares
+    
+    return map50, map50_95

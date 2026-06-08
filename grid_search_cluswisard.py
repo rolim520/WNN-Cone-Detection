@@ -36,9 +36,6 @@ GLOBAL_DATA = {}
 GLOBAL_TOT_GAB = 0
 
 # ==========================================================
-# FUNÇÃO DO WORKER (Roda em cada núcleo da CPU)
-# ==========================================================
-# ==========================================================
 # FUNÇÃO DO WORKER (Atualizada com Proteção de Memória)
 # ==========================================================
 def worker_avaliar_configuracao(params):
@@ -267,7 +264,9 @@ if __name__ == "__main__":
             historico_resultados.append(res)
             concluidos += 1
             
-            cfg = f"Tup:{res['tupla']:2d}|mSc:{res['m_score']}|th:{res['thresh']:4d}|dLim:{res['d_limit']:2d}"
+            # ATUALIZADO: Agora exibe o MODO em tempo real!
+            modo_str = res['modo'].upper()
+            cfg = f"MODO:{modo_str[:7]:7s}|Tup:{res['tupla']:2d}|mSc:{res['m_score']}|th:{res['thresh']:4d}|dLim:{res['d_limit']:2d}"
             print(f"[{concluidos:3d}/{total}] {cfg} -> F1: {res['f1']:5.2f}% (Prec: {res['precisao']:.1f}%, Rec: {res['recall']:.1f}%)")
     # =========================================================================
 
@@ -279,7 +278,8 @@ if __name__ == "__main__":
     historico_ordenado = sorted(historico_resultados, key=lambda x: x['f1'], reverse=True)
 
     for i, r in enumerate(historico_ordenado[:15]):
-        config = f"Res:{r['res']}|Tup:{r['tupla']:2d}|mSc:{r['m_score']}|th:{r['thresh']:4d}|dLim:{r['d_limit']:2d}"
+        modo_str = r['modo'].upper()
+        config = f"Modo:{modo_str[:7]:7s}|Res:{r['res']}|Tup:{r['tupla']:2d}|mSc:{r['m_score']}|th:{r['thresh']:4d}|dLim:{r['d_limit']:2d}"
         print(f" {i+1:2d}º -> {config} || F1: {r['f1']:5.2f}% (Prec: {r['precisao']:5.1f}%, Rec: {r['recall']:5.1f}%, IoU: {r['iou']:5.2f}%)")
 
     # =========================================================================
