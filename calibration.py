@@ -23,13 +23,20 @@ def salvar_configuracoes():
 # Carrega o estado global (a função já existe no seu utils.py)
 ESTADO = carregar_configuracoes()
 
-# Inicializa parâmetros do Canny caso não existam no config.json antigo
+# Inicializa parâmetros novos e do Canny caso não existam no config.json antigo
 if 'canny_limiar1' not in ESTADO: ESTADO['canny_limiar1'] = 100
 if 'canny_limiar2' not in ESTADO: ESTADO['canny_limiar2'] = 200
+
+# Novas chaves para os botões de visualização
+if 'mostrar_legendas' not in ESTADO: ESTADO['mostrar_legendas'] = True
+if 'sobrepor_cores' not in ESTADO: ESTADO['sobrepor_cores'] = True
+if 'mostrar_laranja' not in ESTADO: ESTADO['mostrar_laranja'] = True
+if 'mostrar_branca' not in ESTADO: ESTADO['mostrar_branca'] = True
 
 caminhos_imagens = []
 img_original_atual = None
 tk_image = None
+resize_timer = None # Timer para evitar lag ao redimensionar a janela
 
 def carregar_dataset(pasta):
     global caminhos_imagens
@@ -61,13 +68,16 @@ def processar_e_exibir(*args):
     # 2. Usa a função unificada do utils.py para extrair os candidatos finais
     candidatos_finais = extrair_candidatos_multiplos(mask_laranja, mask_branco, w_img, h_img, ESTADO)
 
-    # 3. NOVO: Aplica a Detecção de Bordas de Canny
+    # 3. Aplica a Detecção de Bordas de Canny
     edges = gerar_canny(img_trabalho, ESTADO)
-    img_canny = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR) # Converte para 3 canais para o grid
+    img_canny = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
 
     # --- FIM DA MEDIÇÃO DE TEMPO ---
     fim_tempo = time.perf_counter()
     tempo_ms = (fim_tempo - inicio_tempo) * 1000
+    
+    # Atualiza as informações de tempo e boxes no TÍTULO da janela
+    root.title(f"Calibrador | Finais gerados: {len(candidatos_finais)} | Tempo de BBox: {tempo_ms:.1f} ms")
 
     # --- COMPOSIÇÃO DOS PAINÉIS ---
 
@@ -76,9 +86,18 @@ def processar_e_exibir(*args):
     for (x, y, w, h) in candidatos_finais:
         cv2.rectangle(img_display, (x, y), (x+w, y+h), (0, 255, 0), 2)
 
-    # PAINEL 2: Máscaras Combinadas (Revelando as cores da imagem original)
-    mask_combinada = cv2.bitwise_or(mask_laranja, mask_branco)
-    painel_mascaras = cv2.bitwise_and(img_trabalho, img_trabalho, mask=mask_combinada)
+    # PAINEL 2: Máscaras Combinadas (Lógica de exibição via Toggles)
+    mask_combinada = np.zeros((h_img, w_img), dtype=np.uint8)
+    if ESTADO['mostrar_laranja']:
+        mask_combinada = cv2.bitwise_or(mask_combinada, mask_laranja)
+    if ESTADO['mostrar_branca']:
+        mask_combinada = cv2.bitwise_or(mask_combinada, mask_branco)
+
+    if ESTADO['sobrepor_cores']:
+        painel_mascaras = cv2.bitwise_and(img_trabalho, img_trabalho, mask=mask_combinada)
+    else:
+        # Se não for sobrepor cor, converte a mascara PB para 3 canais
+        painel_mascaras = cv2.cvtColor(mask_combinada, cv2.COLOR_GRAY2BGR)
 
     # PAINEL 3: Regiões Base (Visualização Didática dos Contornos)
     img_regioes = np.zeros_like(img_trabalho)
@@ -91,31 +110,50 @@ def processar_e_exibir(*args):
     idx_regiao_valida = 0
     for cnt in contornos:
         if cv2.contourArea(cnt) > limite_area_final:
-            np.random.seed(idx_regiao_valida) # Cores consistentes por região
+            np.random.seed(idx_regiao_valida)
             cor_unica = tuple(int(c) for c in np.random.randint(60, 255, size=3))
             cv2.drawContours(img_regioes, [cnt], -1, cor_unica, -1)
             idx_regiao_valida += 1
 
-    # Textos Informativos
-    fonte = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(img_display, f"Finais gerados: {len(candidatos_finais)} | Tempo: {tempo_ms:.1f} ms", (10, 30), fonte, 0.7, (255, 255, 0), 2)
-    cv2.putText(painel_mascaras, "Mascaras: Laranja + Branco", (10, 30), fonte, 0.7, (255, 255, 255), 2)
-    cv2.putText(img_regioes, f"Regioes base: {idx_regiao_valida} (Corte: >{int(limite_area_final)}px)", (10, 30), fonte, 0.6, (255, 255, 255), 2)
-    cv2.putText(img_canny, f"Canny Edges ({int(ESTADO['canny_limiar1'])} - {int(ESTADO['canny_limiar2'])})", (10, 30), fonte, 0.7, (255, 255, 255), 2)
+    # Textos Informativos (Controlados pelo Toggle)
+    if ESTADO['mostrar_legendas']:
+        fonte = cv2.FONT_HERSHEY_SIMPLEX
+        
+        # Cria a string de texto com base no que está ativado
+        txt_mask = "Mascaras:"
+        if ESTADO['mostrar_laranja']: txt_mask += " Laranja"
+        if ESTADO['mostrar_laranja'] and ESTADO['mostrar_branca']: txt_mask += " + "
+        if ESTADO['mostrar_branca']: txt_mask += " Branco"
+        if not ESTADO['mostrar_laranja'] and not ESTADO['mostrar_branca']: txt_mask = "Mascaras: Nenhuma"
+        
+        cv2.putText(painel_mascaras, txt_mask, (10, 30), fonte, 0.7, (255, 255, 255), 2)
+        cv2.putText(img_regioes, f"Regioes base: {idx_regiao_valida} (Corte: >{int(limite_area_final)}px)", (10, 30), fonte, 0.6, (255, 255, 255), 2)
+        cv2.putText(img_canny, f"Canny Edges ({int(ESTADO['canny_limiar1'])} - {int(ESTADO['canny_limiar2'])})", (10, 30), fonte, 0.7, (255, 255, 255), 2)
 
-    # NOVO: Montagem Final Grid 2x2
+    # Montagem Final Grid 2x2
     linha1 = cv2.hconcat([img_display, painel_mascaras])
     linha2 = cv2.hconcat([img_regioes, img_canny])
     imagem_combinada = cv2.vconcat([linha1, linha2])
 
-    # Redimensionamento para caber na tela
+    # Redimensionamento adaptativo para caber na tela sem passar do original
     h_img_c, w_img_c = imagem_combinada.shape[:2]
-    max_w, max_h = 1120, 800  
+    
+    # Pega o tamanho real do frame na interface
+    max_w = frame_visualizacao.winfo_width()
+    max_h = frame_visualizacao.winfo_height()
+    
+    # Fallbacks caso a interface ainda esteja iniciando (tamanhos muito pequenos)
+    if max_w < 100: max_w = 1120
+    if max_h < 100: max_h = 800  
+
     escala = min(max_w / w_img_c, max_h / h_img_c)
+    escala = min(escala, 1.0) # GARANTE que nunca vai esticar além da resolução original
     
     novo_largo = int(w_img_c * escala)
     nova_altura = int(h_img_c * escala)
-    imagem_combinada = cv2.resize(imagem_combinada, (novo_largo, nova_altura))
+    
+    if novo_largo > 0 and nova_altura > 0:
+        imagem_combinada = cv2.resize(imagem_combinada, (novo_largo, nova_altura))
 
     # Exibição no Tkinter
     imagem_rgb = cv2.cvtColor(imagem_combinada, cv2.COLOR_BGR2RGB)
@@ -127,6 +165,10 @@ def ao_mudar_slider(chave, valor, is_float=False):
     ESTADO[chave] = float(valor) if is_float else int(float(valor))
     processar_e_exibir()
 
+def ao_mudar_checkbox(chave, var):
+    ESTADO[chave] = var.get()
+    processar_e_exibir()
+
 def proxima_imagem(event=None):
     ESTADO['idx'] = min(ESTADO['idx'] + 1, len(caminhos_imagens) - 1)
     slider_img.set(ESTADO['idx'])
@@ -136,6 +178,15 @@ def imagem_anterior(event=None):
     ESTADO['idx'] = max(ESTADO['idx'] - 1, 0)
     slider_img.set(ESTADO['idx'])
     atualizar_imagem()
+
+def ao_redimensionar(event):
+    global resize_timer
+    # Filtra para executar apenas quando o frame_visualizacao for redimensionado
+    if event.widget == frame_visualizacao:
+        if resize_timer:
+            root.after_cancel(resize_timer)
+        # Espera 100ms depois que parou de arrastar a janela para processar a imagem
+        resize_timer = root.after(100, processar_e_exibir)
 
 def imprimir_e_sair():
     print("\n" + "="*50)
@@ -175,7 +226,7 @@ def imprimir_e_sair():
 
 # --- Construção da Interface Gráfica ---
 root = tk.Tk()
-root.title("Painel Supremo de Calibração: Laranja + Branco + Pipeline + Canny")
+root.title("Carregando...")
 root.geometry("1550x850") 
 
 frame_controles = tk.Frame(root, width=400, padx=10, pady=5)
@@ -194,6 +245,7 @@ scrollbar.pack(side="right", fill="y")
 
 frame_visualizacao = tk.Frame(root, bg="black")
 frame_visualizacao.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+frame_visualizacao.bind("<Configure>", ao_redimensionar) # Bind dinâmico de tela
 
 label_imagem = tk.Label(frame_visualizacao, bg="black")
 label_imagem.pack(expand=True)
@@ -211,6 +263,13 @@ def criar_slider(frame, texto, chave, min_val, max_val, resolucao=1, is_float=Fa
     s.pack(fill='x')
     return s
 
+def criar_checkbox(frame, texto, chave):
+    var = tk.BooleanVar(value=ESTADO.get(chave, True))
+    cb = tk.Checkbutton(frame, text=texto, variable=var, font=("Arial", 9),
+                        command=lambda: ao_mudar_checkbox(chave, var))
+    cb.pack(anchor='w')
+    return cb
+
 total_imgs = carregar_dataset("images/train")
 
 # =========================================================
@@ -222,6 +281,14 @@ slider_img = tk.Scale(frame_nav, from_=0, to=total_imgs-1, orient='horizontal',
                       command=lambda v: (ao_mudar_slider('idx', v, False), atualizar_imagem()))
 slider_img.set(ESTADO['idx'])
 slider_img.pack(fill='x')
+
+# --- OPÇÕES DE VISUALIZAÇÃO (NOVOS TOGGLES) ---
+frame_opcoes = tk.LabelFrame(scrollable_frame, text="Opções de Visualização", fg="black")
+frame_opcoes.pack(fill='x', pady=4)
+criar_checkbox(frame_opcoes, "Mostrar Legendas nas Imagens", 'mostrar_legendas')
+criar_checkbox(frame_opcoes, "Sobrepor Cores na Máscara", 'sobrepor_cores')
+criar_checkbox(frame_opcoes, "Exibir Máscara Laranja", 'mostrar_laranja')
+criar_checkbox(frame_opcoes, "Exibir Máscara Branca", 'mostrar_branca')
 
 # --- MÁSCARA LARANJA ---
 frame_h1 = tk.LabelFrame(scrollable_frame, text="Cor Laranja: Filtro Principal", fg="#d35400")
@@ -288,7 +355,8 @@ btn_sair = tk.Button(scrollable_frame, text="SALVAR E SAIR", bg="green", fg="whi
 btn_sair.pack(fill='x', pady=10)
 
 if total_imgs > 0:
-    atualizar_imagem()
+    # Chama explicitamente o primeiro processamento após instanciar tudo
+    root.after(100, atualizar_imagem)
     root.mainloop()
 else:
     print("Aviso: Nenhuma imagem encontrada na pasta especificada.")

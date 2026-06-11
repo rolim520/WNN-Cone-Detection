@@ -1,5 +1,5 @@
 {
-    "idx": 77,
+    "idx": 102,
     "h1_min": 0,
     "h1_max": 20,
     "h2_min": 175,
@@ -32,5 +32,9 @@
     "razao_aspecto_max": 3.5,
     "max_regioes_internas": 5,
     "canny_limiar1": 90,
-    "canny_limiar2": 200
+    "canny_limiar2": 200,
+    "mostrar_legendas": false,
+    "sobrepor_cores": false,
+    "mostrar_laranja": true,
+    "mostrar_branca": false
 }

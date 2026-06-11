@@ -11,7 +11,7 @@ ESTADO = carregar_configuracoes()
 # PARÂMETROS OTIMIZADOS
 # ==========================================================
 # --- NOVO: Variável para definir qual modelo usar ---
-TIPO_MODELO = 'cluswisard'  # Escolha entre: 'wisard' ou 'cluswisard'
+TIPO_MODELO = 'wisard'  # Escolha entre: 'wisard' ou 'cluswisard'
 
 MODO_BINARIZACAO = 'cor' # Opções: 'cor', 'canny', 'hibrido'
 RESOLUCAO = 64
