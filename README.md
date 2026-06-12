@@ -30,7 +30,7 @@ Arquivos principais e suas funções:
 
 * `calibration.py`: Interface gráfica para ajuste fino dos limiares de HSV, filtros morfológicos e bordas Canny.
 * `utils.py`: Funções utilitárias centrais (cálculo de IoU, mAP, processamento de imagem, binarização e manipulação do modelo).
-* `grid_search_wisard.py` / `grid_search_cluswisard.py`: Scripts de busca em grade  para encontrar a melhor combinação de hiperparâmetros.
+* `grid_search_wisard.py` / `grid_search_cluswisard.py`: Scripts de busca em grade para encontrar a melhor combinação de hiperparâmetros.
 * `wisard.py` / `cluswisard.py`: Scripts de validação final. Treinam os modelos múltiplas vezes para extrair a incerteza estatística (precisão, recall, F1, mAP) e exportam o melhor modelo.
 * `realtime_detect.py`: Script para captura de vídeo via webcam e detecção de cones em tempo real utilizando os modelos salvos.
 * `config.json`: Arquivo de configuração persistente gerado pela etapa de calibração.
@@ -39,34 +39,53 @@ Arquivos principais e suas funções:
 
 ## Pré-requisitos e Instalação
 
-Recomenda-se a utilização de um ambiente virtual para isolar as dependências do projeto.
+Recomenda-se a utilização de um ambiente virtual para isolar as dependências do projeto. Como a biblioteca do modelo WNN exige a compilação de código C++ localmente, a instalação requer algumas ferramentas de desenvolvimento do sistema.
 
-### 1. Clonar o repositório
+### 1. Clonar o repositório e preparar o ambiente
 
 ```bash
-git clone https://github.com/rolim520/WNN-Cone-Detection.git
+git clone [https://github.com/rolim520/WNN-Cone-Detection.git](https://github.com/rolim520/WNN-Cone-Detection.git)
 cd WNN-Cone-Detection
-```
-
-### 2. Criar e ativar o ambiente virtual
-
-```bash
 python3 -m venv venv
 source venv/bin/activate
+
 ```
 
-### 3. Instalar dependências
+### 2. Instalar dependências do sistema (Linux/Debian/Ubuntu)
 
-No Linux, caso utilize distribuições baseadas em Debian/Ubuntu, verifique se possui o pacote do Tkinter instalado no sistema para que a interface gráfica do script de calibração funcione:
+Para que a interface gráfica do calibrador funcione e os compiladores da WNN consigam rodar, instale os pacotes básicos de desenvolvimento do Python e do sistema:
 
 ```bash
-sudo apt-get install python3-tk
+sudo apt-get update
+sudo apt-get install python3-tk python3-dev build-essential
+
 ```
 
-Em seguida, instale as dependências listadas no arquivo `requirements.txt` em qualquer sistema operacional:
+*(Nota: Substitua `python3-dev` pela sua versão específica do Python caso necessário, ex: `python3.12-dev`).*
+
+### 3. Compilar e Instalar a WiSARD (Branch Develop)
+
+A versão mais recente da `wisardpkg` utilizada neste projeto encontra-se na branch de desenvolvimento. Para instalá-la, siga a ordem exata abaixo para garantir que a ponte entre o C++ e o Python (`pybind11`) esteja disponível antes da compilação:
+
+```bash
+# Atualize as ferramentas de build do Python
+pip install --upgrade pip setuptools wheel
+
+# Instale o pybind11 manualmente
+pip install pybind11
+
+# Clone e compile a wisardpkg ignorando o isolamento de build padrão
+pip install git+[https://github.com/IAZero/wisardpkg.git@develop](https://github.com/IAZero/wisardpkg.git@develop) --no-build-isolation
+
+```
+
+### 4. Instalar o restante das dependências
+
+Por fim, instale as bibliotecas de processamento de imagem e matrizes listadas no repositório:
 
 ```bash
 pip install -r requirements.txt
+
 ```
 
 ---
@@ -85,6 +104,7 @@ Weightless-Cone-Detection/
 └── labels/
     ├── train/       # Anotações YOLO correspondentes ao treino
     └── test/        # Anotações YOLO correspondentes ao teste
+
 ```
 
 ---
@@ -99,6 +119,7 @@ Antes de treinar as redes sem peso, é necessário calibrar os extratores de car
 
 ```bash
 python calibration.py
+
 ```
 
 *Utilização:* Utilize os sliders na interface gráfica para isolar os cones da melhor forma possível. Ao clicar em "SALVAR E SAIR", os limiares otimizados serão gravados no arquivo `config.json`.
@@ -111,6 +132,7 @@ Para encontrar os parâmetros ideais (tamanho da tupla, resolução, limites de 
 python grid_search_wisard.py
 # ou
 python grid_search_cluswisard.py
+
 ```
 
 O script exibirá no terminal os 15 melhores resultados e os salvará em um arquivo JSON correspondente.
@@ -123,6 +145,7 @@ Após atualizar os arquivos principais com os melhores parâmetros encontrados n
 python wisard.py
 # ou
 python cluswisard.py
+
 ```
 
 *Saídas geradas:* Pasta `resultados_wisard` (ou `resultados_cluswisard`) contendo imagens com bounding boxes de teste.
@@ -136,6 +159,7 @@ Com o melhor modelo salvo, você pode testar a detecção utilizando uma webcam.
 
 ```bash
 python realtime_detect.py
+
 ```
 
 *Nota:* Você pode alterar a variável `TIPO_MODELO` dentro do script para alternar entre os pesos do `wisard` e `cluswisard`. Pressione a tecla `q` com a janela de exibição focada para encerrar a captura.
